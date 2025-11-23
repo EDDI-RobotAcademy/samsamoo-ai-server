@@ -109,3 +109,20 @@ async def auth_status(request: Request, session_id: str | None = Cookie(None)):
     print("[DEBUG] Session valid. user_id:", user_id)
     return {"logged_in": True, "user_id": user_id}
 
+
+@authentication_router.post("/logout")
+async def logout(response: Response, session_id: str | None = Cookie(None)):
+    print("[DEBUG] /logout called")
+    print("[DEBUG] Received session_id cookie:", session_id)
+
+    if session_id:
+        redis_key = f"session:{session_id}"
+        redis_client.delete(redis_key)
+        print(f"[DEBUG] Deleted session from Redis: {redis_key}")
+
+    # Clear the cookie
+    response.delete_cookie(key="session_id")
+    print("[DEBUG] Cleared session_id cookie")
+
+    return {"logged_out": True}
+
