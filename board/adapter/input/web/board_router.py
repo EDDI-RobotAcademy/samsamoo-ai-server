@@ -24,7 +24,7 @@ from fastapi import HTTPException
 @board_router.post("/create")
 async def create_board(
     request_data: CreateBoardRequest,
-    user_id: str = Depends(get_current_user)
+    user_id: int = Depends(get_current_user)
 ):
     # 게시글 생성
     board = board_usecase.create_board(
@@ -55,7 +55,7 @@ async def get_board(board_id: int):
 async def update_board(
         board_id: int,
         request: UpdateBoardRequest = Body(...),
-        user_id: str = Depends(get_current_user)):
+        user_id: int = Depends(get_current_user)):
 
     board = board_usecase.get_board(board_id)
     if board.author_id != user_id:
@@ -66,7 +66,7 @@ async def update_board(
 
 # 내가 쓴 게시글 전체 조회
 @board_router.get("/me")
-async def get_my_boards(user_id: str = Depends(get_current_user)):
+async def get_my_boards(user_id: int = Depends(get_current_user)):
     boards = board_usecase.get_boards_by_author(user_id)
     return JSONResponse([{"id": b.id, "title": b.title, "content": b.content} for b in boards])
 
@@ -83,7 +83,7 @@ async def list_boards(page: int = Query(1, ge=1), size: int = Query(10, ge=1)):
 
 # 게시글 삭제
 @board_router.delete("/delete/{board_id}")
-async def delete_board(board_id: int, user_id: str = Depends(get_current_user)):
+async def delete_board(board_id: int, user_id: int = Depends(get_current_user)):
     board = board_usecase.get_board(board_id)
     if board.author_id != user_id:
         return JSONResponse({"error": "Not allowed"}, status_code=403)

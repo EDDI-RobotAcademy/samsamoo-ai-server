@@ -42,6 +42,26 @@ usecase = FinancialAnalysisUseCase(
     report_service
 )
 
+@financial_statement_router.get("/list", response_model=StatementListResponse)
+async def list_user_statements(
+    page: int = Query(1, ge=1),
+    size: int = Query(10, ge=1, le=100),
+    user_id: int = Depends(get_current_user)
+):
+    """List all financial statements for current user with pagination"""
+    statements = usecase.get_user_statements(user_id, page, size)
+
+    # Check analysis progress for each statement to set proper status
+    statements_with_status = []
+    for stmt in statements:
+        has_ratios = len(usecase.get_ratios(stmt.id)) > 0
+        has_report = usecase.get_report(stmt.id) is not None
+        statements_with_status.append((stmt, has_ratios, has_report))
+
+    # TODO: Get total count from repository
+    total = len(statements)  # Placeholder - should come from repository
+
+    return StatementListResponse.from_domain_list(statements_with_status, page, size, total)
 
 @financial_statement_router.post("/create", response_model=StatementResponse)
 async def create_statement(
@@ -292,29 +312,6 @@ async def download_report_pdf(
         media_type="application/pdf",
         filename=f"financial_report_{statement_id}.pdf"
     )
-
-
-@financial_statement_router.get("/list", response_model=StatementListResponse)
-async def list_user_statements(
-    page: int = Query(1, ge=1),
-    size: int = Query(10, ge=1, le=100),
-    user_id: int = Depends(get_current_user)
-):
-    """List all financial statements for current user with pagination"""
-    statements = usecase.get_user_statements(user_id, page, size)
-
-    # Check analysis progress for each statement to set proper status
-    statements_with_status = []
-    for stmt in statements:
-        has_ratios = len(usecase.get_ratios(stmt.id)) > 0
-        has_report = usecase.get_report(stmt.id) is not None
-        statements_with_status.append((stmt, has_ratios, has_report))
-
-    # TODO: Get total count from repository
-    total = len(statements)  # Placeholder - should come from repository
-
-    return StatementListResponse.from_domain_list(statements_with_status, page, size, total)
-
 
 @financial_statement_router.delete("/{statement_id}")
 async def delete_statement(
