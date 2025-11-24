@@ -17,13 +17,26 @@ class StatementResponse(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def from_domain(cls, statement):
+    def from_domain(cls, statement, has_ratios: bool = False, has_report: bool = False):
+        """
+        Convert domain entity to response model.
+
+        Args:
+            statement: FinancialStatement domain entity
+            has_ratios: Whether financial ratios have been calculated (Stage 2)
+            has_report: Whether analysis report has been generated (Stage 3-4)
+        """
         # Determine pipeline status based on available data
         if statement.normalized_data is None:
             status = "metadata_only"
+        elif has_report:
+            # Stage 4 complete: Report generated
+            status = "analysis_complete"
+        elif has_ratios:
+            # Stage 2 complete: Ratios calculated
+            status = "ratios_calculated"
         elif statement.is_complete():
-            # Check if analysis report exists (would need repository check)
-            # For now, assume pdf_uploaded if has normalized data
+            # Stage 1 complete: PDF uploaded and normalized
             status = "pdf_uploaded"
         else:
             status = "metadata_only"

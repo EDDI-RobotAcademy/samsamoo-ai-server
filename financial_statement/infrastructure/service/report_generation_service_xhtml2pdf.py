@@ -251,7 +251,7 @@ class ReportGenerationService(ReportGenerationServicePort):
 
         try:
             # Load template
-            template = self.jinja_env.get_template("financial_report.html")
+            template = self.jinja_env.get_template("financial_reports/financial_report.html")
 
             # Prepare template data
             context = {

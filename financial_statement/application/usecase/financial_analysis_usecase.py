@@ -229,9 +229,10 @@ class FinancialAnalysisUseCase:
         Generate charts and PDF report.
         Helper method for Stage 4.
         """
-        # Create temporary directory for outputs
-        temp_dir = tempfile.mkdtemp(prefix="financial_report_")
-        chart_dir = os.path.join(temp_dir, "charts")
+        # Create persistent directory for outputs (not temp, so it doesn't get cleaned up)
+        reports_dir = os.path.join(os.getcwd(), "generated_reports")
+        statement_dir = os.path.join(reports_dir, f"statement_{statement.id}")
+        chart_dir = os.path.join(statement_dir, "charts")
         os.makedirs(chart_dir, exist_ok=True)
 
         try:
@@ -242,7 +243,7 @@ class FinancialAnalysisUseCase:
             )
 
             # Generate PDF report
-            pdf_path = os.path.join(temp_dir, f"report_{statement.id}.pdf")
+            pdf_path = os.path.join(statement_dir, f"report_{statement.id}.pdf")
             self.report_service.generate_pdf_report(
                 report,
                 statement.normalized_data,
@@ -251,9 +252,9 @@ class FinancialAnalysisUseCase:
                 pdf_path
             )
 
-            # TODO: Upload PDF to S3 and get S3 key
-            # For now, return local path
-            s3_key = f"reports/statement_{statement.id}_report.pdf"
+            # Store local path as s3_key for now (TODO: Upload to S3 in production)
+            # Using absolute path for easy retrieval
+            s3_key = pdf_path
 
             return {
                 "pdf_path": pdf_path,

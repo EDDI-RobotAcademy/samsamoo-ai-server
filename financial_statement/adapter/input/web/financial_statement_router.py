@@ -20,7 +20,8 @@ from financial_statement.infrastructure.repository.financial_repository_impl imp
 from financial_statement.infrastructure.service.pdf_extraction_service import PDFExtractionService
 from financial_statement.infrastructure.service.ratio_calculation_service import RatioCalculationService
 from financial_statement.infrastructure.service.llm_analysis_service import LLMAnalysisService
-from financial_statement.infrastructure.service.report_generation_service import ReportGenerationService
+# Use xhtml2pdf version for Windows compatibility (no GTK+ required)
+from financial_statement.infrastructure.service.report_generation_service_xhtml2pdf import ReportGenerationService
 
 logger = logging.getLogger(__name__)
 
@@ -169,8 +170,8 @@ async def analyze_statement(
         # Run analysis pipeline (async)
         result = await usecase.run_analysis_pipeline(statement_id)
 
-        # Prepare response
-        statement_resp = StatementResponse.from_domain(result["statement"])
+        # Prepare response - analysis is complete so both ratios and report exist
+        statement_resp = StatementResponse.from_domain(result["statement"], has_ratios=True, has_report=True)
         ratios_resp = [RatioItemResponse.from_domain(r) for r in result["ratios"]]
         report_resp = AnalysisReportResponse.from_domain(result["report"])
 
@@ -211,7 +212,11 @@ async def get_statement(
     if statement.user_id != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to view this statement")
 
-    return StatementResponse.from_domain(statement)
+    # Check analysis progress to set proper status
+    has_ratios = len(usecase.get_ratios(statement_id)) > 0
+    has_report = usecase.get_report(statement_id) is not None
+
+    return StatementResponse.from_domain(statement, has_ratios=has_ratios, has_report=has_report)
 
 
 @financial_statement_router.get("/{statement_id}/ratios", response_model=RatioListResponse)
@@ -273,9 +278,20 @@ async def download_report_pdf(
     if not report or not report.report_s3_key:
         raise HTTPException(status_code=404, detail="Report PDF not found")
 
-    # TODO: Download from S3 and return
-    # For now, return placeholder response
-    raise HTTPException(status_code=501, detail="PDF download not yet implemented")
+    # For local development, serve from local filesystem
+    # In production, this would download from S3
+    pdf_path = report.report_s3_key  # Currently stores local path
+    
+    if not os.path.exists(pdf_path):
+        logger.error(f"PDF file not found at path: {pdf_path}")
+        raise HTTPException(status_code=404, detail="Report PDF file not found on disk")
+
+    # Return file response
+    return FileResponse(
+        path=pdf_path,
+        media_type="application/pdf",
+        filename=f"financial_report_{statement_id}.pdf"
+    )
 
 
 @financial_statement_router.get("/list", response_model=StatementListResponse)
@@ -287,10 +303,17 @@ async def list_user_statements(
     """List all financial statements for current user with pagination"""
     statements = usecase.get_user_statements(user_id, page, size)
 
+    # Check analysis progress for each statement to set proper status
+    statements_with_status = []
+    for stmt in statements:
+        has_ratios = len(usecase.get_ratios(stmt.id)) > 0
+        has_report = usecase.get_report(stmt.id) is not None
+        statements_with_status.append((stmt, has_ratios, has_report))
+
     # TODO: Get total count from repository
     total = len(statements)  # Placeholder - should come from repository
 
-    return StatementListResponse.from_domain_list(statements, page, size, total)
+    return StatementListResponse.from_domain_list(statements_with_status, page, size, total)
 
 
 @financial_statement_router.delete("/{statement_id}")
