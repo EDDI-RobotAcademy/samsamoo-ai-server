@@ -429,4 +429,4 @@ models/
 *.txt
 
 # exclude donwloaded_docs
-downloaded_docs/generated_reports/
+generated_reports/
