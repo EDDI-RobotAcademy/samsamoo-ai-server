@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Financial Analysis Report</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+
+        .header {
+            text-align: center;
+            border-bottom: 3px solid #2E86AB;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            color: #2E86AB;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .meta {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+            page-break-inside: avoid;
+        }
+
+        h2 {
+            color: #2E86AB;
+            font-size: 20px;
+            border-bottom: 2px solid #ddd;
+            padding-bottom: 5px;
+            margin-bottom: 15px;
+        }
+
+        h3 {
+            color: #555;
+            font-size: 16px;
+            margin-top: 20px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background-color: #f8f9fa;
+            font-weight: bold;
+            color: #2E86AB;
+        }
+
+        .chart-container {
+            margin: 20px 0;
+            text-align: center;
+            page-break-inside: avoid;
+        }
+
+        .chart-container img {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .kpi-summary {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-left: 4px solid #2E86AB;
+            margin: 15px 0;
+        }
+
+        .footer {
+            text-align: center;
+            font-size: 12px;
+            color: #999;
+            margin-top: 50px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Financial Analysis Report</h1>
+        <div class="meta">
+            <strong>Company:</strong> {{ financial_data.get('company_name', 'N/A') }}<br>
+            <strong>Period:</strong> {{ financial_data.get('fiscal_year', 'N/A') }}
+            {% if financial_data.get('fiscal_quarter') %}Q{{ financial_data.fiscal_quarter }}{% endif %}<br>
+            <strong>Generated:</strong> {{ generation_date }}
+        </div>
+    </div>
+
+    <!-- KPI Summary Section -->
+    <div class="section">
+        <h2>Executive Summary</h2>
+        <div class="kpi-summary">
+            {{ report.kpi_summary }}
+        </div>
+    </div>
+
+    <!-- Financial Statements Section -->
+    <div class="section">
+        <h2>Financial Statements Overview</h2>
+
+        <h3>Balance Sheet</h3>
+        <table>
+            <tr>
+                <th>Item</th>
+                <th>Amount</th>
+            </tr>
+            <tr>
+                <td>Total Assets</td>
+                <td>{{ "{:,.0f}".format(balance_sheet.get('total_assets', 0)) }}</td>
+            </tr>
+            <tr>
+                <td>Total Liabilities</td>
+                <td>{{ "{:,.0f}".format(balance_sheet.get('total_liabilities', 0)) }}</td>
+            </tr>
+            <tr>
+                <td>Total Equity</td>
+                <td>{{ "{:,.0f}".format(balance_sheet.get('total_equity', 0)) }}</td>
+            </tr>
+        </table>
+
+        <h3>Income Statement</h3>
+        <table>
+            <tr>
+                <th>Item</th>
+                <th>Amount</th>
+            </tr>
+            <tr>
+                <td>Revenue</td>
+                <td>{{ "{:,.0f}".format(income_statement.get('revenue', 0)) }}</td>
+            </tr>
+            <tr>
+                <td>Operating Income</td>
+                <td>{{ "{:,.0f}".format(income_statement.get('operating_income', 0)) }}</td>
+            </tr>
+            <tr>
+                <td>Net Income</td>
+                <td>{{ "{:,.0f}".format(income_statement.get('net_income', 0)) }}</td>
+            </tr>
+        </table>
+    </div>
+
+    <!-- Financial Ratios Section -->
+    <div class="section">
+        <h2>Financial Ratio Analysis</h2>
+
+        {% if profitability_ratios %}
+        <h3>Profitability Ratios</h3>
+        <table>
+            <tr>
+                <th>Ratio</th>
+                <th>Value</th>
+            </tr>
+            {% for ratio in profitability_ratios %}
+            <tr>
+                <td>{{ ratio.ratio_type }}</td>
+                <td>{{ ratio.as_percentage() }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% endif %}
+
+        {% if liquidity_ratios %}
+        <h3>Liquidity Ratios</h3>
+        <table>
+            <tr>
+                <th>Ratio</th>
+                <th>Value</th>
+            </tr>
+            {% for ratio in liquidity_ratios %}
+            <tr>
+                <td>{{ ratio.ratio_type }}</td>
+                <td>{{ ratio.as_percentage() }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% endif %}
+
+        {% if leverage_ratios %}
+        <h3>Leverage Ratios</h3>
+        <table>
+            <tr>
+                <th>Ratio</th>
+                <th>Value</th>
+            </tr>
+            {% for ratio in leverage_ratios %}
+            <tr>
+                <td>{{ ratio.ratio_type }}</td>
+                <td>{{ ratio.as_percentage() }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% endif %}
+
+        {% if efficiency_ratios %}
+        <h3>Efficiency Ratios</h3>
+        <table>
+            <tr>
+                <th>Ratio</th>
+                <th>Value</th>
+            </tr>
+            {% for ratio in efficiency_ratios %}
+            <tr>
+                <td>{{ ratio.ratio_type }}</td>
+                <td>{{ ratio.as_percentage() }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% endif %}
+
+        <h3>Interpretation</h3>
+        <div class="kpi-summary">
+            {{ report.ratio_analysis }}
+        </div>
+    </div>
+
+    <!-- Charts Section -->
+    {% if chart_paths %}
+    <div class="section">
+        <h2>Visual Analysis</h2>
+
+        {% for chart_path in chart_paths %}
+        <div class="chart-container">
+            <img src="{{ chart_path }}" alt="Financial Chart">
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="footer">
+        <p>This report was generated automatically using AI-powered financial analysis.</p>
+        <p>© {{ generation_date[:4] }} Financial Analysis System</p>
+    </div>
+</body>
+</html>
