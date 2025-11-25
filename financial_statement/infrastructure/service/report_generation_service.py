@@ -1,19 +1,69 @@
+"""
+Alternative implementation using xhtml2pdf instead of WeasyPrint.
+This version works on Windows without requiring GTK+ libraries.
+
+To use this version:
+1. Install: pip install -r requirements.txt
+2. Replace import in your code:
+   from financial_statement.infrastructure.service.report_generation_service_xhtml2pdf import ReportGenerationService
+"""
+
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for server environments
 import seaborn as sns
 from jinja2 import Template, Environment, FileSystemLoader
-from weasyprint import HTML
+from xhtml2pdf import pisa  # Windows-compatible PDF library
+from xhtml2pdf.default import DEFAULT_FONT
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from typing import Dict, Any, List
 import os
 import logging
 from datetime import datetime
-from pathlib import Path
+from io import BytesIO
 from financial_statement.domain.financial_ratio import FinancialRatio
 from financial_statement.domain.analysis_report import AnalysisReport
 from financial_statement.application.port.report_generation_service_port import ReportGenerationServicePort
 
 logger = logging.getLogger(__name__)
+
+# Register Korean fonts for xhtml2pdf/reportlab
+def _register_korean_fonts():
+    """Register Korean fonts for PDF generation"""
+    # Common Korean font paths on Windows
+    font_paths = [
+        # Windows fonts
+        "C:/Windows/Fonts/malgun.ttf",  # Malgun Gothic (맑은 고딕)
+        "C:/Windows/Fonts/malgunbd.ttf",  # Malgun Gothic Bold
+        "C:/Windows/Fonts/gulim.ttc",  # Gulim
+        "C:/Windows/Fonts/batang.ttc",  # Batang
+        # Linux fonts
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansKR-Regular.otf",
+        # Mac fonts
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+    ]
+
+    registered = False
+    for font_path in font_paths:
+        if os.path.exists(font_path):
+            try:
+                font_name = os.path.basename(font_path).split('.')[0]
+                pdfmetrics.registerFont(TTFont(font_name, font_path))
+                logger.info(f"Registered Korean font: {font_name} from {font_path}")
+                registered = True
+                break
+            except Exception as e:
+                logger.warning(f"Failed to register font {font_path}: {e}")
+
+    if not registered:
+        logger.warning("No Korean font found. PDF reports may not display Korean text correctly.")
+
+    return registered
+
+# Try to register Korean fonts at module load
+_korean_font_registered = _register_korean_fonts()
 
 # Set matplotlib style
 sns.set_style("whitegrid")
@@ -33,7 +83,8 @@ class ReportGenerationError(Exception):
 
 class ReportGenerationService(ReportGenerationServicePort):
     """
-    Implementation of report generation service.
+    Implementation of report generation service using xhtml2pdf.
+    Windows-compatible alternative to WeasyPrint (no GTK+ required).
     Stage 4 of the analysis pipeline - visualization and PDF creation.
     """
 
@@ -195,7 +246,8 @@ class ReportGenerationService(ReportGenerationServicePort):
         output_path: str
     ) -> str:
         """
-        Generate complete PDF report using Jinja2 templates and WeasyPrint.
+        Generate complete PDF report using Jinja2 templates and xhtml2pdf.
+        Windows-compatible alternative to WeasyPrint.
         """
         logger.info(f"Generating PDF report at {output_path}")
 
@@ -208,8 +260,18 @@ class ReportGenerationService(ReportGenerationServicePort):
                 chart_paths
             )
 
-            # Convert HTML to PDF
-            HTML(string=html_content).write_pdf(output_path)
+            # Convert HTML to PDF using xhtml2pdf with UTF-8 encoding
+            with open(output_path, "wb") as pdf_file:
+                # Encode HTML content as UTF-8 bytes for proper Korean support
+                html_bytes = html_content.encode('utf-8')
+                pisa_status = pisa.CreatePDF(
+                    html_bytes,
+                    dest=pdf_file,
+                    encoding='utf-8'
+                )
+
+            if pisa_status.err:
+                raise ReportGenerationError(f"PDF generation had {pisa_status.err} errors")
 
             logger.info(f"PDF report generated successfully at {output_path}")
             return output_path
@@ -234,15 +296,12 @@ class ReportGenerationService(ReportGenerationServicePort):
             # Load template
             template = self.jinja_env.get_template("financial_reports/financial_report.html")
 
-            # Convert chart paths to file URIs for WeasyPrint (Windows compatibility)
-            chart_uris = [Path(path).as_uri() for path in chart_paths]
-
             # Prepare template data
             context = {
                 "report": report,
                 "financial_data": financial_data,
                 "ratios": ratios,
-                "chart_paths": chart_uris,  # Use file URIs instead of raw paths
+                "chart_paths": chart_paths,
                 "generation_date": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
                 "balance_sheet": financial_data.get("balance_sheet", {}),
                 "income_statement": financial_data.get("income_statement", {}),
@@ -360,3 +419,148 @@ class ReportGenerationService(ReportGenerationServicePort):
         plt.close()
 
         return output_path
+
+    def generate_markdown_report(
+        self,
+        report: AnalysisReport,
+        financial_data: Dict[str, Any],
+        ratios: List[FinancialRatio],
+        output_path: str
+    ) -> str:
+        """
+        Generate Markdown report for LLM analysis summary.
+        Korean text displays correctly without font encoding issues.
+        """
+        logger.info(f"Generating Markdown report at {output_path}")
+
+        try:
+            # Build markdown content
+            lines = []
+
+            # Header
+            company_name = financial_data.get('company_name', 'N/A')
+            fiscal_year = financial_data.get('fiscal_year', 'N/A')
+            fiscal_quarter = financial_data.get('fiscal_quarter', '')
+            generation_date = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+            lines.append(f"# 재무분석 보고서 (Financial Analysis Report)")
+            lines.append("")
+            lines.append(f"**회사명 (Company):** {company_name}")
+            lines.append(f"**회계기간 (Period):** {fiscal_year}" + (f" Q{fiscal_quarter}" if fiscal_quarter else ""))
+            lines.append(f"**생성일시 (Generated):** {generation_date}")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+            # Executive Summary / KPI Summary
+            lines.append("## 핵심 요약 (Executive Summary)")
+            lines.append("")
+            if report and report.kpi_summary:
+                lines.append(report.kpi_summary)
+            else:
+                lines.append("*분석 요약이 생성되지 않았습니다. (No summary generated)*")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+            # Financial Statements Overview
+            lines.append("## 재무제표 개요 (Financial Statements Overview)")
+            lines.append("")
+
+            # Balance Sheet
+            balance_sheet = financial_data.get('balance_sheet', {})
+            lines.append("### 재무상태표 (Balance Sheet)")
+            lines.append("")
+            lines.append("| 항목 (Item) | 금액 (Amount) |")
+            lines.append("|-------------|---------------|")
+            lines.append(f"| 총자산 (Total Assets) | {balance_sheet.get('total_assets', 0):,.0f} |")
+            lines.append(f"| 총부채 (Total Liabilities) | {balance_sheet.get('total_liabilities', 0):,.0f} |")
+            lines.append(f"| 총자본 (Total Equity) | {balance_sheet.get('total_equity', 0):,.0f} |")
+            lines.append("")
+
+            # Income Statement
+            income_statement = financial_data.get('income_statement', {})
+            lines.append("### 손익계산서 (Income Statement)")
+            lines.append("")
+            lines.append("| 항목 (Item) | 금액 (Amount) |")
+            lines.append("|-------------|---------------|")
+            lines.append(f"| 매출액 (Revenue) | {income_statement.get('revenue', 0):,.0f} |")
+            lines.append(f"| 영업이익 (Operating Income) | {income_statement.get('operating_income', 0):,.0f} |")
+            lines.append(f"| 당기순이익 (Net Income) | {income_statement.get('net_income', 0):,.0f} |")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+            # Financial Ratios
+            lines.append("## 재무비율 분석 (Financial Ratio Analysis)")
+            lines.append("")
+
+            # Group ratios by category
+            profitability = [r for r in ratios if r.is_profitability_ratio()]
+            liquidity = [r for r in ratios if r.is_liquidity_ratio()]
+            leverage = [r for r in ratios if r.is_leverage_ratio()]
+            efficiency = [r for r in ratios if r.is_efficiency_ratio()]
+
+            if profitability:
+                lines.append("### 수익성 비율 (Profitability Ratios)")
+                lines.append("")
+                lines.append("| 비율 (Ratio) | 값 (Value) |")
+                lines.append("|--------------|------------|")
+                for ratio in profitability:
+                    lines.append(f"| {ratio.ratio_type} | {ratio.as_percentage()} |")
+                lines.append("")
+
+            if liquidity:
+                lines.append("### 유동성 비율 (Liquidity Ratios)")
+                lines.append("")
+                lines.append("| 비율 (Ratio) | 값 (Value) |")
+                lines.append("|--------------|------------|")
+                for ratio in liquidity:
+                    lines.append(f"| {ratio.ratio_type} | {ratio.as_percentage()} |")
+                lines.append("")
+
+            if leverage:
+                lines.append("### 레버리지 비율 (Leverage Ratios)")
+                lines.append("")
+                lines.append("| 비율 (Ratio) | 값 (Value) |")
+                lines.append("|--------------|------------|")
+                for ratio in leverage:
+                    lines.append(f"| {ratio.ratio_type} | {ratio.as_percentage()} |")
+                lines.append("")
+
+            if efficiency:
+                lines.append("### 효율성 비율 (Efficiency Ratios)")
+                lines.append("")
+                lines.append("| 비율 (Ratio) | 값 (Value) |")
+                lines.append("|--------------|------------|")
+                for ratio in efficiency:
+                    lines.append(f"| {ratio.ratio_type} | {ratio.as_percentage()} |")
+                lines.append("")
+
+            # Ratio Analysis Interpretation
+            lines.append("### 비율 분석 해석 (Ratio Analysis Interpretation)")
+            lines.append("")
+            if report and report.ratio_analysis:
+                lines.append(report.ratio_analysis)
+            else:
+                lines.append("*비율 분석이 생성되지 않았습니다. (No ratio analysis generated)*")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+            # Footer
+            lines.append("*이 보고서는 AI 기반 재무분석 시스템에 의해 자동 생성되었습니다.*")
+            lines.append("")
+            lines.append("*This report was generated automatically using AI-powered financial analysis.*")
+
+            # Write to file with UTF-8 encoding
+            markdown_content = "\n".join(lines)
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(markdown_content)
+
+            logger.info(f"Markdown report generated successfully at {output_path}")
+            return output_path
+
+        except Exception as e:
+            logger.error(f"Failed to generate Markdown report: {e}")
+            raise ReportGenerationError(f"Markdown generation failed: {e}")

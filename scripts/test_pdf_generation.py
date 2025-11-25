@@ -108,7 +108,7 @@ def main():
         print("   Update your imports to use this alternative implementation")
     else:
         print("❌ No PDF library is working")
-        print("   Install requirements: pip install -r requirements_financial_windows.txt")
+        print("   Install requirements: pip install -r requirements.txt")
 
     if not results["matplotlib"]:
         print("⚠️  matplotlib not working - chart generation will fail")
