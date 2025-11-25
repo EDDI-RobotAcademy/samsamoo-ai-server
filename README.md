@@ -1,49 +1,103 @@
-# samsamoo-ai-server
-samsamoo-ai-server
+# SamSamOO-AI-Server
 
-## .env.local setting (The top-level package)
-`````
+AI-powered financial statement analysis backend with multi-provider LLM support.
+
+## Features
+
+- **Financial Statement Analysis**: PDF/Excel document processing with automated ratio calculation
+- **Multi-Provider LLM System**: OpenAI, Anthropic, or template-based analysis with automatic failover
+- **XBRL/DART Integration**: Korean corporate financial data via DART API
+- **Hexagonal Architecture**: Clean separation of domain, application, and infrastructure layers
+- **OAuth Authentication**: Google OAuth2 with Redis session management
+
+## Quick Start
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment
+cp .env.example .env.local
+# Edit .env.local with your credentials
+
+# Run the server
+python app/main.py
+```
+
+Server runs at: http://localhost:33333
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Getting Started](./docs/guides/getting-started.md) | Setup and installation guide |
+| [LLM Providers](./docs/guides/llm-providers.md) | Multi-provider LLM configuration |
+| [XBRL Analysis](./docs/guides/xbrl-analysis.md) | DART API integration guide |
+| [Architecture](./docs/architecture/hexagonal.md) | Hexagonal architecture overview |
+| [Troubleshooting](./docs/troubleshooting/README.md) | Common issues and solutions |
+
+## API Documentation
+
+- **Swagger UI**: http://localhost:33333/docs
+- **ReDoc**: http://localhost:33333/redoc
+
+## Project Structure
+
+```
+SamSamOO-AI-Server/
+├── account/               # User account management
+├── board/                 # Authenticated boards
+├── anonymous_board/       # Public boards
+├── documents/             # Document management
+├── documents_multi_agents/# Multi-agent processing
+├── financial_statement/   # Financial analysis (main feature)
+├── social_oauth/          # OAuth authentication
+├── config/                # Database, Redis configuration
+├── app/                   # FastAPI application entry
+├── docs/                  # Documentation
+└── scripts/               # Utility scripts
+```
+
+## Environment Configuration
+
+Create `.env.local` in the project root:
+
+```env
+# Server
 APP_HOST=0.0.0.0
 APP_PORT=33333
 
-AWS_ACCESS_KEY_ID=yourAccessKeyId
-AWS_SECRET_ACCESS_KEY=yourSecretAccessKey
-AWS_REGION=ap-northeast-2
-AWS_S3_BUCKET=yourS3Bucket
-MYSQL_USER=
+# Database
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_DATABASE=fastapi_test_db
+MYSQL_USER=your_user
+MYSQL_PASSWORD=your_password
 
-MYSQL_PASSWORD=
-MYSQL_HOST=
-MYSQL_PORT=
-MYSQL_DATABASE=
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
 
-REDIS_HOST=
-REDIS_PORT=
-REDIS_DB=
-REDIS_PASSWORD=
+# LLM Provider (openai/anthropic/template/auto)
+LLM_PROVIDER=auto
+OPENAI_API_KEY=your_key
 
-GOOGLE_CLIENT_ID=yourClientId
-GOOGLE_CLIENT_SECRET=yourClientSecret
-GOOGLE_REDIRECT_URI=http://localhost:33333/authentication/google/redirect
-CLIENT_REDIRECT_URL=http://localhost:3000
-SESSION_TTL_SECONDS=3600
+# Google OAuth
+GOOGLE_CLIENT_ID=your_client_id
+GOOGLE_CLIENT_SECRET=your_secret
+```
 
-`````
+See [Getting Started](./docs/guides/getting-started.md) for complete setup instructions.
 
-## install setting (프로젝트 cli 설치 등)
-`````
-1. 프로젝트별 인터프리터 설정(파이참)
-- 상단 메뉴에서 File → Settings (단축키 Ctrl + Alt + S)
-- 왼쪽 메뉴에서 Python Interpreter 클릭
-- 오른쪽 상단에 인터프리터 추가 (로컬 인터프리터 추가) 
-- 기존항목이나 새로 생성으로 conda로 설정!
+## Technology Stack
 
-2. pip install
-pip install fastapi pymysql redis PyPDF2
-pip install uvicorn
-pip install tensorflow transformers
-pip install torch torchvision
+- **Framework**: FastAPI with Uvicorn
+- **Database**: MySQL with SQLAlchemy ORM
+- **Cache**: Redis for session management
+- **AI/ML**: OpenAI, Anthropic, LangChain
+- **Document Processing**: pdfplumber, camelot-py, pytesseract
+- **Data Analysis**: pandas, numpy, matplotlib
 
-# 실행
-python -m app.main
-`````
+## License
+
+Private repository.

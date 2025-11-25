@@ -17,7 +17,7 @@ The application has been configured to use **xhtml2pdf** (Windows-compatible alt
 ### Verification
 1. Ensure Windows-compatible requirements are installed:
    ```bash
-   pip install -r requirements_financial_windows.txt
+   pip install -r requirements.txt
    ```
 
 2. Verify xhtml2pdf is installed:
@@ -62,7 +62,7 @@ If you're on Linux or Mac and want to use WeasyPrint:
 
 2. Install Python package:
    ```bash
-   pip install -r requirements_financial.txt
+   pip install -r requirements.txt
    ```
 
 3. Update router import:

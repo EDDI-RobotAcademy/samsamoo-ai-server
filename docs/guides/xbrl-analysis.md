@@ -34,7 +34,7 @@ This module provides XBRL-based corporate financial analysis capabilities, integ
 ### 1. Install Dependencies
 
 ```bash
-pip install -r requirements_xbrl.txt
+pip install -r requirements.txt
 ```
 
 ### 2. Configure Environment Variables

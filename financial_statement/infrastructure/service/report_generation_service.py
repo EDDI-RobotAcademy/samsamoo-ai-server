@@ -3,7 +3,7 @@ Alternative implementation using xhtml2pdf instead of WeasyPrint.
 This version works on Windows without requiring GTK+ libraries.
 
 To use this version:
-1. Install: pip install -r requirements_financial_windows.txt
+1. Install: pip install -r requirements.txt
 2. Replace import in your code:
    from financial_statement.infrastructure.service.report_generation_service_xhtml2pdf import ReportGenerationService
 """
