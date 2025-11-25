@@ -25,6 +25,7 @@ from config.database.session import Base, engine
 from documents.adapter.input.web.documents_router import documents_router
 from documents_multi_agents.adapter.input.web.document_multi_agent_router import documents_multi_agents_router
 from financial_statement.adapter.input.web.financial_statement_router import financial_statement_router
+from financial_statement.adapter.input.web.xbrl_router import xbrl_router
 from social_oauth.adapter.input.web.google_oauth2_router import authentication_router
 
 from fastapi import FastAPI
@@ -50,6 +51,7 @@ app.include_router(board_router, prefix="/board")
 app.include_router(documents_router, prefix="/documents")
 app.include_router(documents_multi_agents_router, prefix="/documents-multi-agents")
 app.include_router(financial_statement_router, prefix="/financial-statements")
+app.include_router(xbrl_router, prefix="/xbrl")
 
 # 앱 실행
 if __name__ == "__main__":

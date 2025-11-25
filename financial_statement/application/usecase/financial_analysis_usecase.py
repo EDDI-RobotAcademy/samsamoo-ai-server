@@ -168,6 +168,7 @@ class FinancialAnalysisUseCase:
                 statement.normalized_data,
                 saved_ratios
             )
+            logger.info(analysis_result)
 
             # Validation: Stage 3 → Stage 4
             self.validator.validate_stage3_output(analysis_result)

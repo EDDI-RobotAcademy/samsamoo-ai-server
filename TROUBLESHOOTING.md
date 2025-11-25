@@ -353,6 +353,64 @@ npm run dev
 - Grid layout without category grouping
 - Calculation timestamps visible for each ratio
 
+## LLM Korean Language Output (Improved: 2025-11-24)
+
+### Enhancement
+Updated all LLM analysis prompts to return Korean language responses instead of English.
+
+### Changes Made
+Modified `llm_analysis_service_v2.py` to include Korean language instructions in all LLM prompts:
+
+1. **KPI Summary Generation** (Line 71-86):
+   - System prompt: Added "You must respond in Korean language (한국어)"
+   - User prompt: Converted entire prompt to Korean
+   - Explicitly instructs: "모든 응답은 반드시 한국어로 작성해야 합니다"
+
+2. **Statement Table Summary** (Line 128-161):
+   - System prompt: Added "All text content in the JSON must be in Korean language (한국어)"
+   - User prompt: Converted to Korean with Korean field examples
+   - JSON text fields will contain Korean content
+
+3. **Ratio Analysis** (Line 202-222):
+   - System prompt: Added "You must respond in Korean language (한국어)"
+   - User prompt: Converted analysis requirements to Korean
+   - Categories translated: 수익성, 유동성, 레버리지, 효율성
+
+### Files Modified
+- `SamSamOO-AI-Server/financial_statement/infrastructure/service/llm_analysis_service_v2.py`
+
+### Expected Behavior After Update
+1. **KPI 요약**: Returns executive summary in Korean
+2. **재무제표 요약**: JSON fields contain Korean text insights
+3. **비율 분석**: Returns comprehensive ratio analysis in Korean
+
+### Testing
+```bash
+# 1. Restart backend server
+cd SamSamOO-AI-Server
+python app/main.py
+
+# 2. Run analysis on a financial statement
+# 3. Check report sections - all LLM-generated text should be in Korean:
+#    - kpi_summary: Korean text
+#    - statement_table_summary.key_insights: Korean text
+#    - ratio_analysis: Korean text
+```
+
+### Note on Ratio Accuracy
+If specific ratios appear incorrect, this is likely due to:
+1. **Data extraction issues**: Check if PDF extraction captured correct values
+2. **Field mapping**: Verify that balance sheet and income statement fields map correctly
+3. **Calculation formulas**: Standard formulas are used (ROA = Net Income / Total Assets, etc.)
+
+To investigate ratio accuracy:
+1. Check extracted data in `financial_statement.normalized_data`
+2. Verify source PDF contains expected values
+3. Review logs for any extraction warnings
+4. Compare calculated ratios against manual calculation using extracted data
+
+The ratio calculation service (`ratio_calculation_service.py`) uses standard financial formulas and is deterministic (no LLM involvement).
+
 ## Other Common Issues
 
 ### MySQL Connection Errors
