@@ -184,8 +184,14 @@ class LLMAnalysisServiceV2(LLMAnalysisServicePort):
         """
         Generate interpretation and analysis of financial ratios.
         Falls back to template-based analysis if provider fails.
+        If no ratios are provided, performs direct LLM analysis of raw financial data.
         """
         logger.info("Generating ratio analysis")
+
+        # Handle case where ratio calculation failed - analyze raw data directly
+        if not ratios or len(ratios) == 0:
+            logger.info("No ratios provided - performing direct LLM analysis of financial data")
+            return await self._generate_direct_financial_analysis(financial_data)
 
         # Use template provider's specialized method if available
         if isinstance(self.provider, TemplateProvider):
@@ -238,6 +244,168 @@ class LLMAnalysisServiceV2(LLMAnalysisServicePort):
             logger.info("Falling back to template-based analysis")
             template = TemplateProvider()
             return template.create_ratio_analysis(ratios)
+
+    async def _generate_direct_financial_analysis(
+        self,
+        financial_data: Dict[str, Any]
+    ) -> str:
+        """
+        Generate direct analysis of raw financial data when ratio calculation fails.
+        LLM analyzes the extracted data directly without pre-calculated ratios.
+
+        Args:
+            financial_data: Normalized financial data from PDF extraction
+
+        Returns:
+            String containing LLM analysis of financial data
+        """
+        logger.info("Generating direct financial analysis (ratio calculation was skipped)")
+
+        # Use template if no LLM available
+        if isinstance(self.provider, TemplateProvider) or not self.provider.is_available():
+            logger.warning("LLM provider unavailable for direct analysis, using template")
+            return self._create_direct_analysis_template(financial_data)
+
+        try:
+            bs = financial_data.get("balance_sheet", {})
+            is_data = financial_data.get("income_statement", {})
+
+            system_prompt = "You are an expert financial analyst. Analyze the raw financial data directly and provide comprehensive insights. You must respond in Korean language (한국어)."
+
+            user_prompt = f"""당신은 재무 분석 전문가입니다. 아래의 추출된 재무 데이터를 직접 분석하고 전문적인 인사이트를 제공하십시오.
+
+참고: 재무비율 자동 계산이 실패하여 원본 데이터를 직접 분석합니다.
+
+대차대조표 데이터:
+{json.dumps(bs, indent=2, ensure_ascii=False)}
+
+손익계산서 데이터:
+{json.dumps(is_data, indent=2, ensure_ascii=False)}
+
+다음을 포함하는 포괄적인 재무 분석을 한국어로 작성하십시오 (최대 500단어):
+
+1. **재무 상태 분석**
+   - 자산 구조 분석 (자산 구성 및 품질)
+   - 부채 구조 분석 (레버리지 수준)
+   - 자본 건전성 평가
+
+2. **수익성 분석**
+   - 매출 및 수익 추세
+   - 영업이익과 순이익 분석
+   - 수익 마진 평가
+
+3. **재무 건전성 종합 평가**
+   - 주요 강점
+   - 주의가 필요한 영역
+   - 개선 권장사항
+
+4. **주요 재무비율 추정** (가능한 경우)
+   - 데이터에서 계산 가능한 비율들을 직접 계산하여 제시
+
+비즈니스 의사결정을 위한 실용적인 인사이트에 집중하십시오.
+
+**중요: 모든 응답은 반드시 한국어로 작성해야 합니다.**"""
+
+            result = await self.provider.generate_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=2500,
+                temperature=0.3
+            )
+
+            logger.info("Direct financial analysis generated successfully")
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to generate direct analysis: {e}")
+            return self._create_direct_analysis_template(financial_data)
+
+    def _create_direct_analysis_template(self, financial_data: Dict[str, Any]) -> str:
+        """
+        Create template-based direct analysis when LLM is unavailable.
+
+        Args:
+            financial_data: Normalized financial data
+
+        Returns:
+            Template string with basic financial analysis
+        """
+        bs = financial_data.get("balance_sheet", {})
+        is_data = financial_data.get("income_statement", {})
+
+        # Extract key values with defaults
+        total_assets = bs.get("total_assets", 0)
+        total_liabilities = bs.get("total_liabilities", 0)
+        total_equity = bs.get("total_equity", 0)
+        revenue = is_data.get("revenue", 0)
+        net_income = is_data.get("net_income", 0)
+        operating_income = is_data.get("operating_income", 0)
+
+        analysis_parts = [
+            "📊 재무 데이터 직접 분석",
+            "",
+            "⚠️ 참고: 재무비율 자동 계산이 실패하여 원본 데이터를 직접 분석했습니다.",
+            "",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "",
+            "📈 대차대조표 요약:",
+        ]
+
+        if total_assets:
+            analysis_parts.append(f"  • 총자산: {total_assets:,.0f}원")
+        if total_liabilities:
+            analysis_parts.append(f"  • 총부채: {total_liabilities:,.0f}원")
+        if total_equity:
+            analysis_parts.append(f"  • 총자본: {total_equity:,.0f}원")
+
+        analysis_parts.extend([
+            "",
+            "💰 손익계산서 요약:",
+        ])
+
+        if revenue:
+            analysis_parts.append(f"  • 매출액: {revenue:,.0f}원")
+        if operating_income:
+            analysis_parts.append(f"  • 영업이익: {operating_income:,.0f}원")
+        if net_income:
+            analysis_parts.append(f"  • 당기순이익: {net_income:,.0f}원")
+
+        # Calculate basic ratios if possible
+        analysis_parts.extend([
+            "",
+            "📐 계산 가능한 기본 비율:",
+        ])
+
+        calculated_any = False
+        if total_assets and total_liabilities:
+            debt_ratio = (total_liabilities / total_assets) * 100
+            analysis_parts.append(f"  • 부채비율: {debt_ratio:.2f}%")
+            calculated_any = True
+
+        if total_equity and net_income:
+            roe = (net_income / total_equity) * 100
+            analysis_parts.append(f"  • ROE (자기자본이익률): {roe:.2f}%")
+            calculated_any = True
+
+        if revenue and net_income:
+            profit_margin = (net_income / revenue) * 100
+            analysis_parts.append(f"  • 순이익률: {profit_margin:.2f}%")
+            calculated_any = True
+
+        if not calculated_any:
+            analysis_parts.append("  • 비율 계산에 필요한 데이터가 부족합니다.")
+
+        analysis_parts.extend([
+            "",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            "",
+            "💡 권장사항:",
+            "  • LLM API를 활성화하면 더 상세한 분석을 받을 수 있습니다.",
+            "  • 재무제표의 데이터 품질을 확인해 주세요.",
+            "  • 필요시 원본 PDF 파일을 다시 업로드해 주세요.",
+        ])
+
+        return "\n".join(analysis_parts)
 
     async def generate_complete_analysis(
         self,

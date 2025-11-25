@@ -42,6 +42,33 @@ usecase = FinancialAnalysisUseCase(
 )
 
 
+# ============================================================
+# IMPORTANT: Static routes MUST come before dynamic /{id} routes
+# Otherwise FastAPI will try to match "list" as a statement_id
+# ============================================================
+
+@financial_statement_router.get("/list", response_model=StatementListResponse)
+async def list_user_statements(
+    page: int = Query(1, ge=1),
+    size: int = Query(10, ge=1, le=100),
+    user_id: int = Depends(get_current_user)
+):
+    """List all financial statements for current user with pagination"""
+    statements = usecase.get_user_statements(user_id, page, size)
+
+    # Check analysis progress for each statement to set proper status
+    statements_with_status = []
+    for stmt in statements:
+        has_ratios = len(usecase.get_ratios(stmt.id)) > 0
+        has_report = usecase.get_report(stmt.id) is not None
+        statements_with_status.append((stmt, has_ratios, has_report))
+
+    # TODO: Get total count from repository
+    total = len(statements)  # Placeholder - should come from repository
+
+    return StatementListResponse.from_domain_list(statements_with_status, page, size, total)
+
+
 @financial_statement_router.post("/create", response_model=StatementResponse)
 async def create_statement(
     request: CreateStatementRequest,
@@ -170,7 +197,11 @@ async def analyze_statement(
         result = await usecase.run_analysis_pipeline(statement_id)
 
         # Prepare response - analysis is complete so both ratios and report exist
-        statement_resp = StatementResponse.from_domain(result["statement"], has_ratios=True, has_report=True)
+        # Note: ratios may be empty if ratio calculation was skipped (fallback to LLM analysis)
+        has_ratios = len(result["ratios"]) > 0
+        ratio_calculation_skipped = result.get("ratio_calculation_skipped", False)
+
+        statement_resp = StatementResponse.from_domain(result["statement"], has_ratios=has_ratios, has_report=True)
         ratios_resp = [RatioItemResponse.from_domain(r) for r in result["ratios"]]
         report_resp = AnalysisReportResponse.from_domain(result["report"])
 
@@ -182,7 +213,8 @@ async def analyze_statement(
             statement=statement_resp,
             ratios=ratios_resp,
             report=report_resp,
-            report_pdf_url=report_pdf_url
+            report_pdf_url=report_pdf_url,
+            ratio_calculation_skipped=ratio_calculation_skipped
         )
 
     except HTTPException:
@@ -353,28 +385,6 @@ async def download_report_markdown(
     except Exception as e:
         logger.error(f"Failed to generate markdown report: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate markdown report: {str(e)}")
-
-
-@financial_statement_router.get("/list", response_model=StatementListResponse)
-async def list_user_statements(
-    page: int = Query(1, ge=1),
-    size: int = Query(10, ge=1, le=100),
-    user_id: int = Depends(get_current_user)
-):
-    """List all financial statements for current user with pagination"""
-    statements = usecase.get_user_statements(user_id, page, size)
-
-    # Check analysis progress for each statement to set proper status
-    statements_with_status = []
-    for stmt in statements:
-        has_ratios = len(usecase.get_ratios(stmt.id)) > 0
-        has_report = usecase.get_report(stmt.id) is not None
-        statements_with_status.append((stmt, has_ratios, has_report))
-
-    # TODO: Get total count from repository
-    total = len(statements)  # Placeholder - should come from repository
-
-    return StatementListResponse.from_domain_list(statements_with_status, page, size, total)
 
 
 @financial_statement_router.delete("/{statement_id}")

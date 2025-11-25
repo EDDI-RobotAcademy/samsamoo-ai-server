@@ -136,6 +136,10 @@ class FinancialAnalysisUseCase:
                 "report": AnalysisReport,
                 "report_pdf_path": str
             }
+
+        Note:
+            If ratio calculation fails, the pipeline gracefully falls back to
+            LLM-only analysis using the raw extracted financial data.
         """
         logger.info(f"Starting analysis pipeline for statement {statement_id}")
 
@@ -147,27 +151,44 @@ class FinancialAnalysisUseCase:
         if not statement.is_complete():
             raise ValueError("Statement is incomplete - PDF must be uploaded first")
 
+        saved_ratios = []
+        ratio_calculation_failed = False
+
         try:
             # Stage 2: Calculate Financial Ratios
             logger.info("Stage 2: Calculating financial ratios")
-            ratios = self.calculation_service.calculate_all_ratios(
-                statement.normalized_data,
-                statement_id
-            )
+            try:
+                ratios = self.calculation_service.calculate_all_ratios(
+                    statement.normalized_data,
+                    statement_id
+                )
 
-            # Validation: Stage 2 → Stage 3
-            self.validator.validate_stage2_output(ratios)
+                # Validation: Stage 2 → Stage 3
+                self.validator.validate_stage2_output(ratios)
 
-            # Save ratios
-            saved_ratios = self.repository.save_ratios(ratios)
-            logger.info(f"Calculated and saved {len(saved_ratios)} financial ratios")
+                # Save ratios
+                saved_ratios = self.repository.save_ratios(ratios)
+                logger.info(f"Calculated and saved {len(saved_ratios)} financial ratios")
+
+            except (ValidationError, Exception) as ratio_error:
+                # Ratio calculation failed - proceed with LLM-only analysis
+                ratio_calculation_failed = True
+                logger.warning(f"Ratio calculation failed: {ratio_error}. "
+                             f"Proceeding with LLM-only analysis of uploaded document.")
 
             # Stage 3: LLM Analysis
             logger.info("Stage 3: Generating LLM analysis")
-            analysis_result = await self.llm_service.generate_complete_analysis(
-                statement.normalized_data,
-                saved_ratios
-            )
+            if ratio_calculation_failed:
+                # Fall back to LLM analysis without ratios
+                analysis_result = await self._generate_llm_only_analysis(
+                    statement.normalized_data,
+                    statement_id
+                )
+            else:
+                analysis_result = await self.llm_service.generate_complete_analysis(
+                    statement.normalized_data,
+                    saved_ratios
+                )
             logger.info(analysis_result)
 
             # Validation: Stage 3 → Stage 4
@@ -194,23 +215,31 @@ class FinancialAnalysisUseCase:
             saved_report = self.repository.save_report(report)
             logger.info(f"Saved analysis report with ID: {saved_report.id}")
 
-            # Final validation
-            self.validator.validate_final_output(
-                statement,
-                saved_ratios,
-                saved_report,
-                report_result["chart_paths"]
-            )
+            # Final validation (skip ratio check if calculation failed)
+            if not ratio_calculation_failed:
+                self.validator.validate_final_output(
+                    statement,
+                    saved_ratios,
+                    saved_report,
+                    report_result["chart_paths"]
+                )
+            else:
+                # Partial validation - skip ratio requirements
+                logger.info("Performing partial final validation (ratio calculation was skipped)")
+                if not statement.is_complete():
+                    raise ValidationError("Financial statement is incomplete")
 
             result = {
                 "statement": statement,
                 "ratios": saved_ratios,
                 "report": saved_report,
                 "report_pdf_path": report_result["pdf_path"],
-                "chart_paths": report_result["chart_paths"]
+                "chart_paths": report_result["chart_paths"],
+                "ratio_calculation_skipped": ratio_calculation_failed
             }
 
-            logger.info(f"Analysis pipeline completed successfully for statement {statement_id}")
+            logger.info(f"Analysis pipeline completed successfully for statement {statement_id}"
+                       + (" (with ratio calculation fallback)" if ratio_calculation_failed else ""))
             return result
 
         except ValidationError as e:
@@ -218,6 +247,47 @@ class FinancialAnalysisUseCase:
             raise
         except Exception as e:
             logger.error(f"Analysis pipeline failed for statement {statement_id}: {e}")
+            raise
+
+    async def _generate_llm_only_analysis(
+        self,
+        financial_data: Dict[str, Any],
+        statement_id: int
+    ) -> Dict[str, Any]:
+        """
+        Generate LLM analysis when ratio calculation fails.
+        Requests LLM to directly analyze the raw extracted financial data.
+
+        Args:
+            financial_data: Normalized financial data from PDF extraction
+            statement_id: Statement ID for logging
+
+        Returns:
+            Dictionary with analysis results (same structure as generate_complete_analysis)
+        """
+        logger.info(f"Generating LLM-only analysis for statement {statement_id} "
+                   "(ratio calculation was skipped)")
+
+        # Generate analysis with empty ratios list - LLM will analyze raw data
+        empty_ratios = []
+
+        try:
+            analysis_result = await self.llm_service.generate_complete_analysis(
+                financial_data,
+                empty_ratios
+            )
+
+            # Append note about skipped ratio calculation
+            if "ratio_analysis" in analysis_result and analysis_result["ratio_analysis"]:
+                analysis_result["ratio_analysis"] = (
+                    "⚠️ 참고: 재무비율 자동 계산이 실패하여 LLM이 추출된 재무 데이터를 직접 분석했습니다.\n\n"
+                    + analysis_result["ratio_analysis"]
+                )
+
+            return analysis_result
+
+        except Exception as e:
+            logger.error(f"LLM-only analysis failed: {e}")
             raise
 
     async def _generate_report(
