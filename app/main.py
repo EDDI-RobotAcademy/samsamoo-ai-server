@@ -1,4 +1,7 @@
 import os
+
+from faq.adapter.input.web.faqs_router import faqs_router
+
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 os.environ["TORCH_USE_CUDA_DSA"] = "1"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
