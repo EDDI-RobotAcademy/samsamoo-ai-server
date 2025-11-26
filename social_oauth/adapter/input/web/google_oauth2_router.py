@@ -108,4 +108,3 @@ async def auth_status(request: Request, session_id: str | None = Cookie(None)):
 
     print("[DEBUG] Session valid. user_id:", user_id)
     return {"logged_in": True, "user_id": user_id}
-
