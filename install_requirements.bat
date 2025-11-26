@@ -19,7 +19,7 @@ python -m pip install --upgrade pip
 echo.
 
 echo Step 3: Installing financial requirements...
-pip install -r requirements_financial.txt
+pip install -r requirements.txt
 echo.
 
 echo ========================================

@@ -103,3 +103,28 @@ class ReportGenerationServicePort(ABC):
             ReportGenerationError: If HTML generation fails
         """
         pass
+
+    @abstractmethod
+    def generate_markdown_report(
+        self,
+        report: AnalysisReport,
+        financial_data: Dict[str, Any],
+        ratios: List[FinancialRatio],
+        output_path: str
+    ) -> str:
+        """
+        Generate Markdown report for LLM analysis summary.
+
+        Args:
+            report: AnalysisReport with LLM-generated content
+            financial_data: Normalized financial statement data
+            ratios: Calculated financial ratios
+            output_path: Path where MD should be saved
+
+        Returns:
+            Path to generated Markdown file
+
+        Raises:
+            ReportGenerationError: If Markdown generation fails
+        """
+        pass

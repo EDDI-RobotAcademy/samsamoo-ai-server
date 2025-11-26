@@ -23,9 +23,17 @@ load_dotenv()
 from anonymous_board.adapter.input.web.anonymous_board_router import anonymous_board_router
 from board.adapter.input.web.board_router import board_router
 from config.database.session import Base, engine
+
+# Import all ORM models to ensure they are registered with SQLAlchemy's Base.metadata
+# This must happen before Base.metadata.create_all() is called
+from financial_statement.infrastructure.orm import (
+    FinancialStatementORM, FinancialRatioORM, AnalysisReportORM, XBRLAnalysisORM
+)
+
 from documents.adapter.input.web.documents_router import documents_router
 from documents_multi_agents.adapter.input.web.document_multi_agent_router import documents_multi_agents_router
 from financial_statement.adapter.input.web.financial_statement_router import financial_statement_router
+from financial_statement.adapter.input.web.xbrl_router import xbrl_router
 from social_oauth.adapter.input.web.google_oauth2_router import authentication_router
 from faq.adapter.input.web.faqs_router import faqs_router
 from inquiry.adapter.input.web.inquiry_router import inquiry_router
@@ -55,6 +63,7 @@ app.include_router(financial_statement_router, prefix="/financial-statements")
 app.include_router(faqs_router, prefix="/faqs")
 app.include_router(inquiry_router, prefix="/inquiries")
 
+app.include_router(xbrl_router, prefix="/xbrl")
 
 # 앱 실행
 if __name__ == "__main__":

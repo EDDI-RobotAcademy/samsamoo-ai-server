@@ -29,11 +29,18 @@ class RatioCalculationService(CalculationServicePort):
         bs = financial_data.get("balance_sheet", {})
         is_data = financial_data.get("income_statement", {})
 
+        # Log input values for debugging
+        net_income = float(is_data.get("net_income", 0))
+        total_assets = float(bs.get("total_assets", 0))
+        total_equity = float(bs.get("total_equity", 0))
+        revenue = float(is_data.get("revenue", 0))
+        operating_income = float(is_data.get("operating_income", 0))
+
+        logger.info(f"Profitability inputs: net_income={net_income}, total_assets={total_assets}, "
+                   f"total_equity={total_equity}, revenue={revenue}, operating_income={operating_income}")
+
         try:
             # ROA = Net Income / Total Assets
-            net_income = float(is_data.get("net_income", 0))
-            total_assets = float(bs.get("total_assets", 0))
-
             if total_assets > 0:
                 roa = (net_income / total_assets) * 100
                 ratios.append(FinancialRatio(
@@ -41,9 +48,11 @@ class RatioCalculationService(CalculationServicePort):
                     ratio_type=FinancialRatio.ROA,
                     ratio_value=Decimal(str(round(roa, 4)))
                 ))
+                logger.info(f"ROA calculated: {roa:.4f}%")
+            else:
+                logger.warning("ROA skipped: total_assets is 0")
 
             # ROE = Net Income / Total Equity
-            total_equity = float(bs.get("total_equity", 0))
             if total_equity > 0:
                 roe = (net_income / total_equity) * 100
                 ratios.append(FinancialRatio(
@@ -51,9 +60,11 @@ class RatioCalculationService(CalculationServicePort):
                     ratio_type=FinancialRatio.ROE,
                     ratio_value=Decimal(str(round(roe, 4)))
                 ))
+                logger.info(f"ROE calculated: {roe:.4f}%")
+            else:
+                logger.warning("ROE skipped: total_equity is 0")
 
             # Profit Margin = Net Income / Revenue
-            revenue = float(is_data.get("revenue", 0))
             if revenue > 0:
                 profit_margin = (net_income / revenue) * 100
                 ratios.append(FinancialRatio(
@@ -61,9 +72,11 @@ class RatioCalculationService(CalculationServicePort):
                     ratio_type=FinancialRatio.PROFIT_MARGIN,
                     ratio_value=Decimal(str(round(profit_margin, 4)))
                 ))
+                logger.info(f"Profit Margin calculated: {profit_margin:.4f}%")
+            else:
+                logger.warning("Profit Margin skipped: revenue is 0")
 
             # Operating Margin = Operating Income / Revenue
-            operating_income = float(is_data.get("operating_income", 0))
             if revenue > 0:
                 operating_margin = (operating_income / revenue) * 100
                 ratios.append(FinancialRatio(
@@ -71,6 +84,9 @@ class RatioCalculationService(CalculationServicePort):
                     ratio_type=FinancialRatio.OPERATING_MARGIN,
                     ratio_value=Decimal(str(round(operating_margin, 4)))
                 ))
+                logger.info(f"Operating Margin calculated: {operating_margin:.4f}%")
+            else:
+                logger.warning("Operating Margin skipped: revenue is 0")
 
         except Exception as e:
             logger.error(f"Error calculating profitability ratios: {e}")
@@ -86,10 +102,15 @@ class RatioCalculationService(CalculationServicePort):
         ratios = []
         bs = financial_data.get("balance_sheet", {})
 
-        try:
-            current_assets = float(bs.get("current_assets", 0))
-            current_liabilities = float(bs.get("current_liabilities", 0))
+        # Log input values for debugging
+        current_assets = float(bs.get("current_assets", 0))
+        current_liabilities = float(bs.get("current_liabilities", 0))
+        inventory = float(bs.get("inventory", 0))
 
+        logger.info(f"Liquidity inputs: current_assets={current_assets}, "
+                   f"current_liabilities={current_liabilities}, inventory={inventory}")
+
+        try:
             # Current Ratio = Current Assets / Current Liabilities
             if current_liabilities > 0:
                 current_ratio = current_assets / current_liabilities
@@ -98,9 +119,11 @@ class RatioCalculationService(CalculationServicePort):
                     ratio_type=FinancialRatio.CURRENT_RATIO,
                     ratio_value=Decimal(str(round(current_ratio, 4)))
                 ))
+                logger.info(f"Current Ratio calculated: {current_ratio:.4f}")
+            else:
+                logger.warning("Current Ratio skipped: current_liabilities is 0")
 
             # Quick Ratio = (Current Assets - Inventory) / Current Liabilities
-            inventory = float(bs.get("inventory", 0))
             if current_liabilities > 0:
                 quick_ratio = (current_assets - inventory) / current_liabilities
                 ratios.append(FinancialRatio(
@@ -108,6 +131,9 @@ class RatioCalculationService(CalculationServicePort):
                     ratio_type=FinancialRatio.QUICK_RATIO,
                     ratio_value=Decimal(str(round(quick_ratio, 4)))
                 ))
+                logger.info(f"Quick Ratio calculated: {quick_ratio:.4f}")
+            else:
+                logger.warning("Quick Ratio skipped: current_liabilities is 0")
 
         except Exception as e:
             logger.error(f"Error calculating liquidity ratios: {e}")
@@ -123,11 +149,15 @@ class RatioCalculationService(CalculationServicePort):
         ratios = []
         bs = financial_data.get("balance_sheet", {})
 
-        try:
-            total_assets = float(bs.get("total_assets", 0))
-            total_liabilities = float(bs.get("total_liabilities", 0))
-            total_equity = float(bs.get("total_equity", 0))
+        # Log input values for debugging
+        total_assets = float(bs.get("total_assets", 0))
+        total_liabilities = float(bs.get("total_liabilities", 0))
+        total_equity = float(bs.get("total_equity", 0))
 
+        logger.info(f"Leverage inputs: total_assets={total_assets}, "
+                   f"total_liabilities={total_liabilities}, total_equity={total_equity}")
+
+        try:
             # Debt Ratio = Total Liabilities / Total Assets
             if total_assets > 0:
                 debt_ratio = total_liabilities / total_assets
@@ -136,6 +166,9 @@ class RatioCalculationService(CalculationServicePort):
                     ratio_type=FinancialRatio.DEBT_RATIO,
                     ratio_value=Decimal(str(round(debt_ratio, 4)))
                 ))
+                logger.info(f"Debt Ratio calculated: {debt_ratio:.4f}")
+            else:
+                logger.warning("Debt Ratio skipped: total_assets is 0")
 
             # Equity Multiplier = Total Assets / Total Equity
             if total_equity > 0:
@@ -145,6 +178,9 @@ class RatioCalculationService(CalculationServicePort):
                     ratio_type=FinancialRatio.EQUITY_MULTIPLIER,
                     ratio_value=Decimal(str(round(equity_multiplier, 4)))
                 ))
+                logger.info(f"Equity Multiplier calculated: {equity_multiplier:.4f}")
+            else:
+                logger.warning("Equity Multiplier skipped: total_equity is 0")
 
         except Exception as e:
             logger.error(f"Error calculating leverage ratios: {e}")
@@ -161,10 +197,13 @@ class RatioCalculationService(CalculationServicePort):
         bs = financial_data.get("balance_sheet", {})
         is_data = financial_data.get("income_statement", {})
 
-        try:
-            revenue = float(is_data.get("revenue", 0))
-            total_assets = float(bs.get("total_assets", 0))
+        # Log input values for debugging
+        revenue = float(is_data.get("revenue", 0))
+        total_assets = float(bs.get("total_assets", 0))
 
+        logger.info(f"Efficiency inputs: revenue={revenue}, total_assets={total_assets}")
+
+        try:
             # Asset Turnover = Revenue / Total Assets
             if total_assets > 0:
                 asset_turnover = revenue / total_assets
@@ -173,6 +212,9 @@ class RatioCalculationService(CalculationServicePort):
                     ratio_type=FinancialRatio.ASSET_TURNOVER,
                     ratio_value=Decimal(str(round(asset_turnover, 4)))
                 ))
+                logger.info(f"Asset Turnover calculated: {asset_turnover:.4f}")
+            else:
+                logger.warning("Asset Turnover skipped: total_assets is 0")
 
         except Exception as e:
             logger.error(f"Error calculating efficiency ratios: {e}")
@@ -181,10 +223,21 @@ class RatioCalculationService(CalculationServicePort):
         logger.info(f"Calculated {len(ratios)} efficiency ratios")
         return ratios
 
-    def calculate_all_ratios(self, financial_data: Dict[str, Any], statement_id: int) -> List[FinancialRatio]:
+    def calculate_all_ratios(
+        self,
+        financial_data: Dict[str, Any],
+        statement_id: int = 0,
+        skip_statement_id_validation: bool = False
+    ) -> List[FinancialRatio]:
         """
         Calculate all available financial ratios.
         Returns partial results if some calculations fail (graceful degradation).
+
+        Args:
+            financial_data: Extracted financial data with balance_sheet, income_statement
+            statement_id: ID of the financial statement (0 for non-persisted XBRL analysis)
+            skip_statement_id_validation: If True, skip validation of statement_id > 0
+                                         (useful for XBRL analysis without DB persistence)
         """
         logger.info(f"Calculating all ratios for statement {statement_id}")
 
@@ -222,10 +275,11 @@ class RatioCalculationService(CalculationServicePort):
         if len(all_ratios) == 0:
             raise CalculationError("Failed to calculate any financial ratios")
 
-        # Final validation: ensure all ratios have valid statement_id
-        for ratio in all_ratios:
-            if ratio.statement_id <= 0:
-                raise CalculationError(f"Ratio {ratio.ratio_type} has invalid statement_id: {ratio.statement_id}")
+        # Final validation: ensure all ratios have valid statement_id (unless skipped for XBRL)
+        if not skip_statement_id_validation:
+            for ratio in all_ratios:
+                if ratio.statement_id <= 0:
+                    raise CalculationError(f"Ratio {ratio.ratio_type} has invalid statement_id: {ratio.statement_id}")
 
         logger.info(f"Successfully calculated {len(all_ratios)} ratios total")
         return all_ratios
