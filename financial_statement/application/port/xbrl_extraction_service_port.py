@@ -112,11 +112,16 @@ class XBRLExtractionServicePort(ABC):
     @abstractmethod
     def validate_xbrl_structure(
         self,
-        xbrl_doc: XBRLDocument
+        xbrl_doc: XBRLDocument,
+        financial_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Validate XBRL document structure and completeness.
-        
+
+        Args:
+            xbrl_doc: The parsed XBRL document
+            financial_data: Optional pre-extracted financial data for accurate validation
+
         Returns:
             Validation result with status and any warnings/errors
         """

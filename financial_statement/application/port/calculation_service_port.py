@@ -74,13 +74,20 @@ class CalculationServicePort(ABC):
         pass
 
     @abstractmethod
-    def calculate_all_ratios(self, financial_data: Dict[str, Any], statement_id: int) -> List[FinancialRatio]:
+    def calculate_all_ratios(
+        self,
+        financial_data: Dict[str, Any],
+        statement_id: int,
+        skip_statement_id_validation: bool = False
+    ) -> List[FinancialRatio]:
         """
         Calculate all available financial ratios.
 
         Args:
             financial_data: Normalized financial statement data
             statement_id: ID of the financial statement
+            skip_statement_id_validation: If True, skip validation of statement_id > 0
+                                         (useful for XBRL analysis without DB persistence)
 
         Returns:
             List of all calculated FinancialRatio objects
