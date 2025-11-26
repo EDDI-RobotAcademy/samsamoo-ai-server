@@ -223,10 +223,21 @@ class RatioCalculationService(CalculationServicePort):
         logger.info(f"Calculated {len(ratios)} efficiency ratios")
         return ratios
 
-    def calculate_all_ratios(self, financial_data: Dict[str, Any], statement_id: int) -> List[FinancialRatio]:
+    def calculate_all_ratios(
+        self,
+        financial_data: Dict[str, Any],
+        statement_id: int = 0,
+        skip_statement_id_validation: bool = False
+    ) -> List[FinancialRatio]:
         """
         Calculate all available financial ratios.
         Returns partial results if some calculations fail (graceful degradation).
+
+        Args:
+            financial_data: Extracted financial data with balance_sheet, income_statement
+            statement_id: ID of the financial statement (0 for non-persisted XBRL analysis)
+            skip_statement_id_validation: If True, skip validation of statement_id > 0
+                                         (useful for XBRL analysis without DB persistence)
         """
         logger.info(f"Calculating all ratios for statement {statement_id}")
 
@@ -264,10 +275,11 @@ class RatioCalculationService(CalculationServicePort):
         if len(all_ratios) == 0:
             raise CalculationError("Failed to calculate any financial ratios")
 
-        # Final validation: ensure all ratios have valid statement_id
-        for ratio in all_ratios:
-            if ratio.statement_id <= 0:
-                raise CalculationError(f"Ratio {ratio.ratio_type} has invalid statement_id: {ratio.statement_id}")
+        # Final validation: ensure all ratios have valid statement_id (unless skipped for XBRL)
+        if not skip_statement_id_validation:
+            for ratio in all_ratios:
+                if ratio.statement_id <= 0:
+                    raise CalculationError(f"Ratio {ratio.ratio_type} has invalid statement_id: {ratio.statement_id}")
 
         logger.info(f"Successfully calculated {len(all_ratios)} ratios total")
         return all_ratios

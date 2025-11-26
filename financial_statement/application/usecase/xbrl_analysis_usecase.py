@@ -2,21 +2,31 @@
 XBRL Analysis Use Case
 
 Orchestrates the complete XBRL-based financial analysis workflow:
-1. Fetch XBRL data from DART API
+1. Fetch XBRL data from DART API or uploaded file
 2. Parse and extract financial information
 3. Calculate financial ratios
 4. Generate LLM-powered corporate analysis
+5. Generate PDF/Markdown reports
+6. Persist analysis results to database
+
+Enhanced to match PDF analysis feature parity.
 """
 import logging
+import os
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
-from financial_statement.domain.xbrl_document import XBRLDocument, ReportType
+from financial_statement.domain.xbrl_document import XBRLDocument, ReportType, XBRLTaxonomy
 from financial_statement.domain.financial_ratio import FinancialRatio
+from financial_statement.domain.analysis_report import AnalysisReport
+from financial_statement.domain.xbrl_analysis import XBRLAnalysis, XBRLAnalysisStatus, XBRLSourceType
 from financial_statement.infrastructure.service.dart_api_service import DARTAPIService, DARTNotFoundError
 from financial_statement.infrastructure.service.xbrl_extraction_service import XBRLExtractionService
 from financial_statement.infrastructure.service.ratio_calculation_service import RatioCalculationService
 from financial_statement.infrastructure.service.corporate_analysis_service import CorporateAnalysisService
+from financial_statement.infrastructure.service.report_generation_service import ReportGenerationService
+from financial_statement.infrastructure.repository.xbrl_analysis_repository_impl import XBRLAnalysisRepositoryImpl
+from financial_statement.application.port.xbrl_analysis_repository_port import XBRLAnalysisRepositoryPort
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +53,9 @@ class XBRLAnalysisUseCase:
         dart_service: DARTAPIService = None,
         xbrl_service: XBRLExtractionService = None,
         calculation_service: RatioCalculationService = None,
-        analysis_service: CorporateAnalysisService = None
+        analysis_service: CorporateAnalysisService = None,
+        report_service: ReportGenerationService = None,
+        repository: XBRLAnalysisRepositoryPort = None
     ):
         """
         Initialize use case with required services.
@@ -53,11 +65,15 @@ class XBRLAnalysisUseCase:
             xbrl_service: XBRL extraction service for parsing
             calculation_service: Ratio calculation service
             analysis_service: Corporate analysis service with LLM
+            report_service: Report generation service for PDF/Markdown
+            repository: Repository for persisting analysis results
         """
         self.dart_service = dart_service or DARTAPIService()
         self.xbrl_service = xbrl_service or XBRLExtractionService()
         self.calculation_service = calculation_service or RatioCalculationService()
         self.analysis_service = analysis_service or CorporateAnalysisService()
+        self.report_service = report_service or ReportGenerationService(template_dir="templates")
+        self.repository = repository or XBRLAnalysisRepositoryImpl()
     
     async def search_corporation(self, corp_name: str) -> List[Dict[str, str]]:
         """
@@ -130,8 +146,9 @@ class XBRLAnalysisUseCase:
             
             # Step 4: Calculate financial ratios
             ratios = self.calculation_service.calculate_all_ratios(
-                financial_data, 
-                statement_id=0  # Using 0 as placeholder since not persisting
+                financial_data,
+                statement_id=0,  # Using 0 as placeholder since not persisting
+                skip_statement_id_validation=True
             )
             logger.info(f"Calculated {len(ratios)} financial ratios")
             
@@ -218,7 +235,8 @@ class XBRLAnalysisUseCase:
             # Calculate financial ratios
             ratios = self.calculation_service.calculate_all_ratios(
                 financial_data, 
-                statement_id=0
+                statement_id=0,
+                skip_statement_id_validation=True
             )
             
             return {
@@ -437,3 +455,326 @@ class XBRLAnalysisUseCase:
     async def close(self):
         """Clean up resources"""
         await self.dart_service.close()
+    
+    # ============================================================
+    # Enhanced Methods with Persistence (PDF Analysis Parity)
+    # ============================================================
+    
+    async def create_analysis(
+        self,
+        corp_code: str,
+        corp_name: str,
+        fiscal_year: int,
+        user_id: Optional[int] = None,
+        report_type: str = "annual",
+        source_type: XBRLSourceType = XBRLSourceType.UPLOAD,
+        source_filename: Optional[str] = None
+    ) -> XBRLAnalysis:
+        """
+        Create a new XBRL analysis record (metadata only).
+        
+        Args:
+            corp_code: Corporation code
+            corp_name: Corporation name
+            fiscal_year: Fiscal year
+            user_id: Optional user ID for ownership
+            report_type: Report type (annual, semi_annual, quarterly)
+            source_type: Source of XBRL data
+            source_filename: Original filename if uploaded
+            
+        Returns:
+            Created XBRLAnalysis entity
+        """
+        logger.info(f"Creating XBRL analysis for {corp_name} ({fiscal_year})")
+        
+        analysis = XBRLAnalysis(
+            corp_code=corp_code,
+            corp_name=corp_name,
+            fiscal_year=fiscal_year,
+            user_id=user_id,
+            report_type=report_type,
+            source_type=source_type,
+            source_filename=source_filename,
+            status=XBRLAnalysisStatus.PENDING
+        )
+        
+        saved = self.repository.save(analysis)
+        logger.info(f"Created XBRL analysis with ID: {saved.id}")
+        return saved
+    
+    async def run_full_analysis_pipeline(
+        self,
+        analysis_id: int,
+        xbrl_content: bytes,
+        industry: str = "default",
+        include_llm: bool = True,
+        generate_reports: bool = True
+    ) -> XBRLAnalysis:
+        """
+        Run the complete analysis pipeline for an XBRL analysis.
+        
+        Pipeline stages:
+        1. Parse XBRL content
+        2. Extract financial data
+        3. Calculate financial ratios
+        4. Generate LLM analysis (optional)
+        5. Generate reports (optional)
+        
+        Args:
+            analysis_id: ID of the analysis record
+            xbrl_content: Raw XBRL content bytes
+            industry: Industry for benchmark comparison
+            include_llm: Whether to include LLM analysis
+            generate_reports: Whether to generate PDF/Markdown reports
+            
+        Returns:
+            Updated XBRLAnalysis with all results
+        """
+        # Get the analysis record
+        analysis = self.repository.find_by_id(analysis_id)
+        if not analysis:
+            raise XBRLAnalysisError(f"Analysis {analysis_id} not found")
+        
+        logger.info(f"Running full analysis pipeline for {analysis.corp_name} (ID: {analysis_id})")
+        
+        try:
+            # Stage 1: Parse XBRL
+            analysis.set_status(XBRLAnalysisStatus.EXTRACTING)
+            self.repository.save(analysis)
+            
+            xbrl_doc = self.xbrl_service.parse_xbrl_content(
+                content=xbrl_content,
+                corp_code=analysis.corp_code,
+                corp_name=analysis.corp_name,
+                fiscal_year=analysis.fiscal_year,
+                report_type=ReportType.ANNUAL,
+                taxonomy=XBRLTaxonomy.KIFRS
+            )
+            
+            analysis.set_metadata(
+                fact_count=len(xbrl_doc.facts),
+                context_count=len(xbrl_doc.contexts),
+                taxonomy=xbrl_doc.taxonomy.value
+            )
+            
+            # Stage 2: Extract financial data
+            financial_data = self.xbrl_service.extract_financial_data(xbrl_doc)
+            analysis.set_financial_data(financial_data)
+            logger.info(f"Extracted financial data: BS={len(financial_data.get('balance_sheet', {}))} items")
+            
+            # Stage 3: Calculate ratios
+            analysis.set_status(XBRLAnalysisStatus.CALCULATING)
+            self.repository.save(analysis)
+            
+            ratios = self.calculation_service.calculate_all_ratios(
+                financial_data,
+                statement_id=analysis_id,
+                skip_statement_id_validation=True
+            )
+            analysis.set_ratios(self._serialize_ratios(ratios))
+            logger.info(f"Calculated {len(ratios)} financial ratios")
+            
+            # Stage 4: LLM Analysis (optional)
+            if include_llm:
+                analysis.set_status(XBRLAnalysisStatus.ANALYZING)
+                self.repository.save(analysis)
+                
+                try:
+                    llm_result = await self.analysis_service.generate_comprehensive_analysis(
+                        corp_name=analysis.corp_name,
+                        financial_data=financial_data,
+                        ratios=ratios,
+                        fiscal_year=analysis.fiscal_year,
+                        industry=industry
+                    )
+                    
+                    analysis.set_llm_analysis(
+                        executive_summary=llm_result.get('executive_summary'),
+                        financial_health=llm_result.get('financial_health'),
+                        ratio_analysis=llm_result.get('ratio_analysis'),
+                        investment_recommendation=llm_result.get('investment_recommendation')
+                    )
+                    logger.info("Generated LLM analysis")
+                except Exception as e:
+                    logger.warning(f"LLM analysis failed: {e}")
+                    # Continue without LLM analysis
+            
+            # Stage 5: Generate Reports (optional)
+            if generate_reports:
+                analysis.set_status(XBRLAnalysisStatus.GENERATING_REPORT)
+                self.repository.save(analysis)
+                
+                try:
+                    report_paths = await self._generate_analysis_reports(analysis, ratios)
+                    analysis.set_report_paths(
+                        pdf_path=report_paths.get('pdf_path'),
+                        md_path=report_paths.get('md_path')
+                    )
+                    logger.info(f"Generated reports: PDF={report_paths.get('pdf_path')}, MD={report_paths.get('md_path')}")
+                except Exception as e:
+                    logger.warning(f"Report generation failed: {e}")
+                    # Continue without reports
+            
+            # Mark as complete
+            analysis.set_status(XBRLAnalysisStatus.COMPLETED)
+            saved = self.repository.save(analysis)
+            
+            logger.info(f"Analysis pipeline completed for {analysis.corp_name}")
+            return saved
+            
+        except Exception as e:
+            logger.error(f"Analysis pipeline failed: {e}")
+            analysis.set_error(str(e))
+            self.repository.save(analysis)
+            raise XBRLAnalysisError(f"Analysis pipeline failed: {e}")
+    
+    async def _generate_analysis_reports(
+        self,
+        analysis: XBRLAnalysis,
+        ratios: List[FinancialRatio]
+    ) -> Dict[str, str]:
+        """
+        Generate PDF and Markdown reports for analysis.
+        
+        Args:
+            analysis: XBRLAnalysis entity with data
+            ratios: List of calculated ratios
+            
+        Returns:
+            Dictionary with pdf_path and md_path
+        """
+        # Create output directory
+        reports_dir = os.path.join(os.getcwd(), "generated_reports", "xbrl")
+        analysis_dir = os.path.join(reports_dir, f"analysis_{analysis.id}")
+        chart_dir = os.path.join(analysis_dir, "charts")
+        os.makedirs(chart_dir, exist_ok=True)
+        
+        result = {}
+        
+        # Create AnalysisReport for compatibility with report service
+        report = AnalysisReport(statement_id=analysis.id)
+        report.set_kpi_summary(analysis.executive_summary or "")
+        report.set_ratio_analysis(analysis.ratio_analysis or "")
+        
+        # Prepare financial data with metadata
+        financial_data = analysis.financial_data.copy()
+        financial_data['company_name'] = analysis.corp_name
+        financial_data['fiscal_year'] = analysis.fiscal_year
+        
+        try:
+            # Generate charts
+            chart_paths = []
+            if ratios:
+                chart_paths = self.report_service.generate_ratio_charts(ratios, chart_dir)
+            
+            # Generate PDF report
+            pdf_path = os.path.join(analysis_dir, f"xbrl_report_{analysis.id}.pdf")
+            self.report_service.generate_pdf_report(
+                report=report,
+                financial_data=financial_data,
+                ratios=ratios,
+                chart_paths=chart_paths,
+                output_path=pdf_path
+            )
+            result['pdf_path'] = pdf_path
+            
+        except Exception as e:
+            logger.warning(f"PDF generation failed: {e}")
+        
+        try:
+            # Generate Markdown report
+            md_path = os.path.join(analysis_dir, f"xbrl_report_{analysis.id}.md")
+            self.report_service.generate_markdown_report(
+                report=report,
+                financial_data=financial_data,
+                ratios=ratios,
+                output_path=md_path
+            )
+            result['md_path'] = md_path
+            
+        except Exception as e:
+            logger.warning(f"Markdown generation failed: {e}")
+        
+        return result
+    
+    # ============================================================
+    # CRUD Operations for Analysis Records
+    # ============================================================
+    
+    def get_analysis(self, analysis_id: int) -> Optional[XBRLAnalysis]:
+        """Get an analysis by ID"""
+        return self.repository.find_by_id(analysis_id)
+    
+    def get_user_analyses(
+        self,
+        user_id: int,
+        page: int = 1,
+        size: int = 10
+    ) -> List[XBRLAnalysis]:
+        """Get all analyses for a user with pagination"""
+        return self.repository.find_by_user_id(user_id, page, size)
+    
+    def count_user_analyses(self, user_id: int) -> int:
+        """Count total analyses for a user"""
+        return self.repository.count_by_user_id(user_id)
+    
+    def get_corp_analyses(
+        self,
+        corp_code: str,
+        fiscal_year: Optional[int] = None
+    ) -> List[XBRLAnalysis]:
+        """Get analyses by corporation code"""
+        return self.repository.find_by_corp_code(corp_code, fiscal_year)
+    
+    def delete_analysis(self, analysis_id: int, user_id: int) -> bool:
+        """
+        Delete an analysis (owner only).
+        
+        Args:
+            analysis_id: Analysis ID to delete
+            user_id: User ID for ownership check
+            
+        Returns:
+            True if deleted, False if not found or unauthorized
+        """
+        analysis = self.repository.find_by_id(analysis_id)
+        
+        if not analysis:
+            return False
+        
+        if analysis.user_id and analysis.user_id != user_id:
+            raise PermissionError(f"User {user_id} is not authorized to delete analysis {analysis_id}")
+        
+        # Clean up report files
+        if analysis.report_pdf_path and os.path.exists(analysis.report_pdf_path):
+            try:
+                os.remove(analysis.report_pdf_path)
+            except Exception as e:
+                logger.warning(f"Failed to delete PDF: {e}")
+        
+        if analysis.report_md_path and os.path.exists(analysis.report_md_path):
+            try:
+                os.remove(analysis.report_md_path)
+            except Exception as e:
+                logger.warning(f"Failed to delete MD: {e}")
+        
+        return self.repository.delete(analysis_id)
+    
+    def get_report_path(self, analysis_id: int, format: str = "pdf") -> Optional[str]:
+        """
+        Get the report file path for an analysis.
+        
+        Args:
+            analysis_id: Analysis ID
+            format: Report format (pdf or md)
+            
+        Returns:
+            File path if exists, None otherwise
+        """
+        analysis = self.repository.find_by_id(analysis_id)
+        if not analysis:
+            return None
+        
+        if format == "md":
+            return analysis.report_md_path
+        return analysis.report_pdf_path

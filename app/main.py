@@ -25,6 +25,13 @@ load_dotenv()
 from anonymous_board.adapter.input.web.anonymous_board_router import anonymous_board_router
 from board.adapter.input.web.board_router import board_router
 from config.database.session import Base, engine
+
+# Import all ORM models to ensure they are registered with SQLAlchemy's Base.metadata
+# This must happen before Base.metadata.create_all() is called
+from financial_statement.infrastructure.orm import (
+    FinancialStatementORM, FinancialRatioORM, AnalysisReportORM, XBRLAnalysisORM
+)
+
 from documents.adapter.input.web.documents_router import documents_router
 from documents_multi_agents.adapter.input.web.document_multi_agent_router import documents_multi_agents_router
 from financial_statement.adapter.input.web.financial_statement_router import financial_statement_router

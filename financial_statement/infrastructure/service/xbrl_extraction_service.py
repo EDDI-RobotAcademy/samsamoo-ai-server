@@ -896,7 +896,191 @@ class XBRLExtractionService(XBRLExtractionServicePort):
             return float(cleaned)
         except (ValueError, TypeError):
             return None
-    
+
+    def _identify_current_period_contexts(self, xbrl_doc: XBRLDocument) -> set:
+        """
+        Identify context IDs that represent the current reporting period.
+
+        Strategy:
+        1. Find the most recent period end date across all contexts
+        2. Select contexts that match this period
+        3. Prefer consolidated contexts over standalone
+        """
+        from collections import defaultdict
+
+        contexts = xbrl_doc.contexts
+        if not contexts:
+            logger.warning("No contexts found in XBRL document")
+            return set()
+
+        # Group contexts by their period end date
+        instant_contexts = defaultdict(list)  # date -> [context_ids]
+        duration_contexts = defaultdict(list)  # end_date -> [context_ids]
+
+        for ctx_id, ctx in contexts.items():
+            if ctx.is_instant and ctx.instant:
+                instant_contexts[ctx.instant].append(ctx_id)
+            elif ctx.is_duration and ctx.period_end:
+                duration_contexts[ctx.period_end].append(ctx_id)
+
+        # Find the most recent dates
+        most_recent_instant = max(instant_contexts.keys()) if instant_contexts else None
+        most_recent_duration_end = max(duration_contexts.keys()) if duration_contexts else None
+
+        logger.info(f"Most recent instant date: {most_recent_instant}")
+        logger.info(f"Most recent duration end date: {most_recent_duration_end}")
+
+        # Collect current period context IDs
+        current_context_ids = set()
+
+        # Add instant contexts for the most recent date (for balance sheet)
+        if most_recent_instant:
+            for ctx_id in instant_contexts[most_recent_instant]:
+                current_context_ids.add(ctx_id)
+            logger.info(f"Added {len(instant_contexts[most_recent_instant])} instant contexts for {most_recent_instant}")
+
+        # Add duration contexts for the most recent period (for income statement, cash flow)
+        if most_recent_duration_end:
+            for ctx_id in duration_contexts[most_recent_duration_end]:
+                current_context_ids.add(ctx_id)
+            logger.info(f"Added {len(duration_contexts[most_recent_duration_end])} duration contexts ending {most_recent_duration_end}")
+
+        # If we found no contexts, fall back to using all contexts
+        if not current_context_ids:
+            logger.warning("Could not identify current period contexts, using all contexts")
+            current_context_ids = set(contexts.keys())
+
+        return current_context_ids
+
+    def _filter_facts_by_context(
+        self,
+        facts: List,
+        current_context_ids: set,
+        xbrl_doc: XBRLDocument
+    ) -> List:
+        """
+        Filter facts to only include those from current period contexts.
+
+        Also handles priority when multiple facts exist for the same concept:
+        1. Prefer consolidated over standalone
+        2. Prefer facts with the most recent context
+        """
+        from collections import defaultdict
+
+        # Group facts by concept
+        concept_facts = defaultdict(list)
+        for fact in facts:
+            if fact.context_ref in current_context_ids:
+                concept_facts[fact.concept.lower()].append(fact)
+
+        # For each concept, select the best fact
+        filtered_facts = []
+        for concept, fact_list in concept_facts.items():
+            if len(fact_list) == 1:
+                filtered_facts.append(fact_list[0])
+            else:
+                # Multiple facts for same concept - need to choose best one
+                best_fact = self._select_best_fact(fact_list, xbrl_doc)
+                if best_fact:
+                    filtered_facts.append(best_fact)
+
+        return filtered_facts
+
+    def _select_best_fact(self, facts: List, xbrl_doc: XBRLDocument):
+        """
+        Select the best fact when multiple facts exist for the same concept.
+
+        Priority:
+        1. Consolidated context over standalone
+        2. Context with longer period (full year over quarter)
+        3. Fact with non-zero, positive value (for assets/equity)
+        """
+        if not facts:
+            return None
+
+        def score_fact(fact) -> tuple:
+            """Score a fact for sorting (higher = better)"""
+            context = xbrl_doc.contexts.get(fact.context_ref)
+            score = 0
+
+            # Prefer consolidated contexts
+            ctx_id_lower = fact.context_ref.lower()
+            if 'consolidated' in ctx_id_lower or 'cns' in ctx_id_lower:
+                score += 100
+            elif 'separate' in ctx_id_lower or 'nonconsolidated' in ctx_id_lower:
+                score -= 50
+
+            # Prefer duration contexts with longer periods for income statement
+            if context and context.is_duration and context.period_start and context.period_end:
+                days = (context.period_end - context.period_start).days
+                score += days // 30  # More months = higher score
+
+            # Prefer non-zero values
+            numeric_val = fact.numeric_value
+            if numeric_val is not None and numeric_val != 0:
+                score += 10
+                # Prefer positive values for assets (common case)
+                if numeric_val > 0:
+                    score += 5
+
+            return (score, numeric_val if numeric_val else 0)
+
+        # Sort by score (descending) and return the best
+        facts_sorted = sorted(facts, key=score_fact, reverse=True)
+        return facts_sorted[0] if facts_sorted else None
+
+    def _build_fact_values_map(self, facts: List, xbrl_doc: XBRLDocument) -> Dict[str, float]:
+        """
+        Build a map of concept names to values from filtered facts.
+
+        Includes multiple lookup keys for each fact:
+        - Original concept name
+        - Lowercase version
+        - Normalized Korean (no spaces)
+        - Local name
+        - Korean label
+        """
+        fact_values = {}
+
+        def normalize_korean(text: str) -> str:
+            """Normalize Korean text by removing all whitespace variations"""
+            if not text:
+                return text
+            return text.replace(" ", "").replace("\u3000", "").replace("\t", "").replace("\n", "").strip()
+
+        for fact in facts:
+            if fact.numeric_value is not None:
+                value = fact.numeric_value
+
+                # Store by lowercase concept
+                concept_key = fact.concept.lower()
+                fact_values[concept_key] = value
+
+                # Also store by original concept (for Korean)
+                fact_values[fact.concept] = value
+
+                # Store normalized version (no spaces)
+                normalized_concept = normalize_korean(fact.concept)
+                fact_values[normalized_concept] = value
+                fact_values[normalized_concept.lower()] = value
+
+                # Store by Korean label if available
+                if hasattr(fact, 'label') and fact.label:
+                    fact_values[fact.label] = value
+                    fact_values[fact.label.lower()] = value
+                    normalized_label = normalize_korean(fact.label)
+                    fact_values[normalized_label] = value
+                    fact_values[normalized_label.lower()] = value
+
+                # Store by local_name if available
+                if fact.local_name:
+                    fact_values[fact.local_name.lower()] = value
+                    fact_values[fact.local_name] = value
+                    normalized_local = normalize_korean(fact.local_name)
+                    fact_values[normalized_local] = value
+
+        return fact_values
+
     def extract_financial_data(
         self,
         xbrl_doc: XBRLDocument
@@ -904,52 +1088,27 @@ class XBRLExtractionService(XBRLExtractionServicePort):
         """
         Extract normalized financial data from XBRL document.
         Maps XBRL concepts to standardized field names.
+
+        IMPORTANT: Filters facts by context to ensure data consistency:
+        - Uses most recent period contexts
+        - Prefers consolidated over standalone values
+        - Validates that related values are from the same context
         """
         logger.info(f"Extracting financial data from {xbrl_doc.corp_name}")
-        
+
         # Get all facts
         all_facts = xbrl_doc.facts
-        
-        # Build concept-to-value map for current period
-        # Include both concept name and Korean labels for better matching
-        fact_values = {}
 
-        def normalize_korean(text: str) -> str:
-            """Normalize Korean text by removing all whitespace variations"""
-            if not text:
-                return text
-            # Remove regular spaces, full-width spaces, and other whitespace
-            return text.replace(" ", "").replace("\u3000", "").replace("\t", "").replace("\n", "").strip()
+        # Step 1: Analyze contexts to find the current period
+        current_period_contexts = self._identify_current_period_contexts(xbrl_doc)
+        logger.info(f"Identified {len(current_period_contexts)} current period contexts")
 
-        for fact in all_facts:
-            if fact.numeric_value is not None:
-                # Store by lowercase concept
-                concept_key = fact.concept.lower()
-                fact_values[concept_key] = fact.numeric_value
+        # Step 2: Filter facts to only include current period
+        filtered_facts = self._filter_facts_by_context(all_facts, current_period_contexts, xbrl_doc)
+        logger.info(f"Filtered to {len(filtered_facts)} facts from current period (from {len(all_facts)} total)")
 
-                # Also store by original concept (for Korean)
-                fact_values[fact.concept] = fact.numeric_value
-
-                # Store normalized version (no spaces)
-                normalized_concept = normalize_korean(fact.concept)
-                fact_values[normalized_concept] = fact.numeric_value
-                fact_values[normalized_concept.lower()] = fact.numeric_value
-
-                # Store by Korean label if available
-                if hasattr(fact, 'label') and fact.label:
-                    fact_values[fact.label] = fact.numeric_value
-                    fact_values[fact.label.lower()] = fact.numeric_value
-                    # Also store normalized label
-                    normalized_label = normalize_korean(fact.label)
-                    fact_values[normalized_label] = fact.numeric_value
-                    fact_values[normalized_label.lower()] = fact.numeric_value
-
-                # Store by local_name if available
-                if fact.local_name:
-                    fact_values[fact.local_name.lower()] = fact.numeric_value
-                    fact_values[fact.local_name] = fact.numeric_value
-                    normalized_local = normalize_korean(fact.local_name)
-                    fact_values[normalized_local] = fact.numeric_value
+        # Step 3: Build concept-to-value map with context awareness
+        fact_values = self._build_fact_values_map(filtered_facts, xbrl_doc)
 
         # Log available fact keys for debugging (sample of Korean keys)
         korean_keys = [k for k in fact_values.keys() if any(ord(c) > 127 for c in str(k))][:20]
@@ -1048,8 +1207,11 @@ class XBRLExtractionService(XBRLExtractionServicePort):
         return result
     
     def _validate_balance_sheet(self, bs: Dict[str, float]) -> Dict[str, float]:
-        """Validate and calculate missing balance sheet items"""
+        """Validate and calculate missing balance sheet items with sanity checks"""
         logger.info(f"Balance sheet before validation: {list(bs.keys())}")
+
+        # Step 1: Sanity checks - detect and fix impossible values
+        bs = self._sanity_check_balance_sheet(bs)
 
         # Calculate total assets if missing
         if 'total_assets' not in bs or bs.get('total_assets', 0) == 0:
@@ -1092,10 +1254,11 @@ class XBRLExtractionService(XBRLExtractionServicePort):
                 bs['current_liabilities'] = total - non_current
                 logger.info(f"Calculated current_liabilities: {bs['current_liabilities']}")
 
-        # Set inventory to 0 if not present (affects Quick Ratio calculation)
-        if 'inventory' not in bs:
+        # Set inventory to 0 if not present or negative (affects Quick Ratio calculation)
+        if 'inventory' not in bs or bs.get('inventory', 0) < 0:
+            if bs.get('inventory', 0) < 0:
+                logger.warning(f"Negative inventory detected ({bs.get('inventory')}), setting to 0")
             bs['inventory'] = 0
-            logger.debug("Inventory not found, defaulting to 0")
 
         # Log final state for debugging
         critical_fields = ['total_assets', 'total_liabilities', 'total_equity',
@@ -1106,6 +1269,113 @@ class XBRLExtractionService(XBRLExtractionServicePort):
                 logger.warning(f"Balance sheet field '{field}' is {value}")
 
         logger.info(f"Balance sheet validation complete: {len(bs)} fields")
+        return bs
+
+    def _sanity_check_balance_sheet(self, bs: Dict[str, float]) -> Dict[str, float]:
+        """
+        Perform sanity checks on balance sheet values to detect context mismatch issues.
+
+        Checks:
+        1. current_assets + non_current_assets should approximately equal total_assets
+        2. current_liabilities + non_current_liabilities should approximately equal total_liabilities
+        3. Assets should be positive
+        4. total_assets should be greater than or equal to max(current_assets, non_current_assets)
+        """
+        tolerance = 0.05  # 5% tolerance for rounding differences
+
+        total_assets = bs.get('total_assets', 0)
+        current_assets = bs.get('current_assets', 0)
+        non_current_assets = bs.get('non_current_assets', 0)
+        total_liabilities = bs.get('total_liabilities', 0)
+        current_liabilities = bs.get('current_liabilities', 0)
+        non_current_liabilities = bs.get('non_current_liabilities', 0)
+        total_equity = bs.get('total_equity', 0)
+
+        # Check 1: Assets consistency
+        # Only correct if it doesn't break the accounting equation
+        if total_assets > 0 and (current_assets > 0 or non_current_assets > 0):
+            calculated_total = current_assets + non_current_assets
+            if calculated_total > 0:
+                diff_ratio = abs(total_assets - calculated_total) / calculated_total
+                if diff_ratio > tolerance:
+                    logger.warning(f"Asset inconsistency detected: total_assets={total_assets:,.0f} vs "
+                                   f"current+non_current={calculated_total:,.0f} (diff={diff_ratio:.1%})")
+                    
+                    # Check if correction would improve or worsen accounting equation
+                    if total_liabilities > 0 and total_equity > 0:
+                        # Calculate equation imbalance before and after potential correction
+                        liabilities_plus_equity = total_liabilities + total_equity
+                        imbalance_before = abs(total_assets - liabilities_plus_equity)
+                        imbalance_after = abs(calculated_total - liabilities_plus_equity)
+                        
+                        if imbalance_after < imbalance_before:
+                            # Correction improves the accounting equation
+                            bs['total_assets'] = calculated_total
+                            logger.info(f"Corrected total_assets to {calculated_total:,.0f} (improves accounting equation)")
+                        else:
+                            # Keep original - it's more consistent with the accounting equation
+                            logger.info(f"Keeping original total_assets={total_assets:,.0f} (better for accounting equation)")
+                    elif calculated_total > total_assets:
+                        # No complete data to check equation, use component sum if larger
+                        bs['total_assets'] = calculated_total
+                        logger.info(f"Corrected total_assets to {calculated_total:,.0f}")
+
+        # Check 2: Liabilities consistency
+        # Only correct if it doesn't break the accounting equation
+        if total_liabilities > 0 and (current_liabilities > 0 or non_current_liabilities > 0):
+            calculated_total = current_liabilities + non_current_liabilities
+            if calculated_total > 0:
+                diff_ratio = abs(total_liabilities - calculated_total) / calculated_total
+                if diff_ratio > tolerance:
+                    logger.warning(f"Liabilities inconsistency detected: total_liabilities={total_liabilities:,.0f} vs "
+                                   f"current+non_current={calculated_total:,.0f} (diff={diff_ratio:.1%})")
+                    
+                    # Check if correction would improve or worsen accounting equation
+                    current_total_assets = bs.get('total_assets', 0)
+                    if current_total_assets > 0 and total_equity > 0:
+                        # Calculate equation imbalance before and after potential correction
+                        imbalance_before = abs(current_total_assets - (total_liabilities + total_equity))
+                        imbalance_after = abs(current_total_assets - (calculated_total + total_equity))
+                        
+                        if imbalance_after < imbalance_before:
+                            # Correction improves the accounting equation
+                            bs['total_liabilities'] = calculated_total
+                            logger.info(f"Corrected total_liabilities to {calculated_total:,.0f} (improves accounting equation)")
+                        else:
+                            # Keep original - it's more consistent with the accounting equation
+                            logger.info(f"Keeping original total_liabilities={total_liabilities:,.0f} (better for accounting equation)")
+                    elif calculated_total > total_liabilities:
+                        # No equity data to check equation, use component sum if larger
+                        bs['total_liabilities'] = calculated_total
+                        logger.info(f"Corrected total_liabilities to {calculated_total:,.0f}")
+
+        # Check 3: total_assets should be >= max component
+        if total_assets > 0:
+            max_component = max(current_assets, non_current_assets)
+            if max_component > total_assets * 1.1:  # 10% tolerance
+                logger.warning(f"Component exceeds total: max(current={current_assets:,.0f}, "
+                               f"non_current={non_current_assets:,.0f}) > total_assets={total_assets:,.0f}")
+                # Recalculate total from components
+                bs['total_assets'] = current_assets + non_current_assets
+                logger.info(f"Recalculated total_assets to {bs['total_assets']:,.0f}")
+
+        # Check 4: Accounting equation (Assets = Liabilities + Equity)
+        final_total_assets = bs.get('total_assets', 0)
+        final_total_liabilities = bs.get('total_liabilities', 0)
+        if final_total_assets > 0 and final_total_liabilities > 0 and total_equity > 0:
+            expected_equity = final_total_assets - final_total_liabilities
+            if expected_equity > 0:
+                equity_diff_ratio = abs(total_equity - expected_equity) / expected_equity
+                if equity_diff_ratio > tolerance:
+                    logger.warning(f"Accounting equation mismatch: equity={total_equity:,.0f} vs "
+                                   f"expected (assets-liabilities)={expected_equity:,.0f}")
+
+        # Check 5: Negative values that shouldn't be negative
+        for field in ['total_assets', 'current_assets', 'non_current_assets', 'total_equity']:
+            if field in bs and bs[field] < 0:
+                logger.warning(f"Unexpected negative value for {field}: {bs[field]:,.0f}")
+                # Don't auto-correct these - they indicate a serious data issue
+
         return bs
     
     def _validate_income_statement(self, is_data: Dict[str, float]) -> Dict[str, float]:
@@ -1176,40 +1446,63 @@ class XBRLExtractionService(XBRLExtractionServicePort):
     
     def validate_xbrl_structure(
         self,
-        xbrl_doc: XBRLDocument
+        xbrl_doc: XBRLDocument,
+        financial_data: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Validate XBRL document structure"""
+        """
+        Validate XBRL document structure.
+
+        Args:
+            xbrl_doc: The parsed XBRL document
+            financial_data: Optional pre-extracted financial data from extract_financial_data().
+                           If not provided, falls back to domain extraction (less accurate).
+        """
         warnings = []
         errors = []
-        
+
         # Check contexts
         if not xbrl_doc.contexts:
             warnings.append("No contexts found in document")
-        
+
         # Check facts
         if not xbrl_doc.facts:
             errors.append("No facts found in document")
-        
-        # Check required financial data
-        bs = xbrl_doc.extract_balance_sheet()
-        is_data = xbrl_doc.extract_income_statement()
-        
+
+        # Use provided financial_data if available, otherwise fall back to domain extraction
+        if financial_data:
+            bs = financial_data.get('balance_sheet', {})
+            is_data = financial_data.get('income_statement', {})
+        else:
+            # Fallback to domain method (less accurate for Korean XBRL)
+            bs = xbrl_doc.extract_balance_sheet()
+            is_data = xbrl_doc.extract_income_statement()
+
         required_bs = ['total_assets', 'total_liabilities', 'total_equity']
         for field in required_bs:
-            if field not in bs:
+            if field not in bs or bs.get(field) is None:
                 warnings.append(f"Missing balance sheet item: {field}")
-        
+
         required_is = ['revenue', 'net_income']
         for field in required_is:
-            if field not in is_data:
+            if field not in is_data or is_data.get(field) is None:
                 warnings.append(f"Missing income statement item: {field}")
-        
+
         # Accounting equation check
-        if all(k in bs for k in ['total_assets', 'total_liabilities', 'total_equity']):
-            diff = abs(bs['total_assets'] - (bs['total_liabilities'] + bs['total_equity']))
-            if diff > 1:  # Allow for rounding
-                warnings.append(f"Accounting equation imbalance: Assets - (Liabilities + Equity) = {diff}")
-        
+        if all(k in bs and bs.get(k) is not None for k in ['total_assets', 'total_liabilities', 'total_equity']):
+            total_assets = bs['total_assets']
+            liabilities_plus_equity = bs['total_liabilities'] + bs['total_equity']
+            diff = abs(total_assets - liabilities_plus_equity)
+            
+            # Use percentage-based tolerance for large values (Korean conglomerates often have minor differences)
+            # Allow 1% tolerance or 1 billion KRW absolute, whichever is larger
+            tolerance_pct = max(total_assets, liabilities_plus_equity) * 0.01  # 1%
+            tolerance_abs = 1_000_000_000  # 1 billion KRW
+            tolerance = max(tolerance_pct, tolerance_abs)
+            
+            if diff > tolerance:
+                diff_pct = (diff / max(total_assets, liabilities_plus_equity)) * 100
+                warnings.append(f"Accounting equation imbalance: Assets({total_assets:,.0f}) - (Liabilities + Equity)({liabilities_plus_equity:,.0f}) = {diff:,.0f} ({diff_pct:.2f}%)")
+
         return {
             'valid': len(errors) == 0,
             'complete': len(warnings) == 0,
