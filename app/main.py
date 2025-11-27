@@ -1,5 +1,7 @@
 import os
 
+from starlette.staticfiles import StaticFiles
+
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 os.environ["TORCH_USE_CUDA_DSA"] = "1"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
@@ -39,10 +41,8 @@ from social_oauth.adapter.input.web.google_oauth2_router import authentication_r
 from starlette.middleware.sessions import SessionMiddleware
 
 
-
 # .env 불러오기
 load_dotenv()
-
 
 
 # 관리자 구글 이메일 리스트
@@ -53,12 +53,18 @@ from faq.adapter.input.web.faqs_router import faqs_router
 from inquiry.adapter.input.web.inquiry_router import inquiry_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from utils.reports_path import get_reports_base_dir
 
 app = FastAPI()
+# 위에서 계산한 REPORTS_BASE_DIR와 동일 경로 사용
+REPORTS_BASE_DIR = get_reports_base_dir()
+print("[app] mount /static ->", REPORTS_BASE_DIR)  # 시작 로그
 
+app.mount("/static", StaticFiles(directory=str(REPORTS_BASE_DIR)), name="static")
 # CORS 설정
 origins = [
     "http://localhost:3000",  # Next.js 프론트 URL
+    "http://localhost:33333",
 ]
 
 app.add_middleware(
