@@ -107,4 +107,27 @@ async def auth_status(request: Request, session_id: str | None = Cookie(None)):
     user_id = session_dict.get("user_id")
 
     print("[DEBUG] Session valid. user_id:", user_id)
-    return {"logged_in": True, "user_id": user_id}
+    # DB에서 계정 정보 조회
+    account = account_usecase.get_account_by_id(user_id)
+    role = account.role if account else None
+
+    return {"logged_in": True, "user_id": user_id, "role": role}
+
+
+
+@authentication_router.post("/logout")
+async def logout(response: Response, session_id: str | None = Cookie(None)):
+    print("[DEBUG] /logout called")
+    print("[DEBUG] Received session_id cookie:", session_id)
+
+    if session_id:
+        redis_key = f"session:{session_id}"
+        redis_client.delete(redis_key)
+        print(f"[DEBUG] Deleted session from Redis: {redis_key}")
+
+    # Clear the cookie
+    response.delete_cookie(key="session_id")
+    print("[DEBUG] Cleared session_id cookie")
+
+    return {"logged_out": True}
+

@@ -1,16 +1,22 @@
-## Hexagonal Architecture 
+# Hexagonal Architecture (Korean)
 
-1. domain  
-2. application  
-3. adapter  
-4. infrastructure  
+한국어로 작성된 헥사고날 아키텍처 설명입니다.
+
+> For English documentation, see [hexagonal.md](./hexagonal.md)
+
+## Hexagonal Architecture
+
+1. domain
+2. application
+3. adapter
+4. infrastructure
 
 ```
 기본적으로 Hexagonal Architecture는 위와 같이 최대 4개의 구성을 가짐
 Layered와 마찬가지로 필요 없으면 빼버릴 수 있음
 가령 Entity가 필요 없는 소셜 인증의 경우
 Google 케이스와 동일하게 domain 패키지가 존재하지 않는 것을 볼 수 있음.
-``` 
+```
 
 ## domain 패키지
 
@@ -75,6 +81,8 @@ Redis, Mongo DB, MySQL, Kafka, RabbitMQ, Airflow 등등
 어찌 보면 외부 프레임워크라고 봐도 괜찮을 것 같습니다.
 ```
 
+## 정리
+
 ```
 벌집처럼 domain을 중간에두고 참조하는 느낌 <- 정.답
 Hexagon(육각형) - 벌집 모양도 육각형 도배
@@ -83,3 +91,8 @@ Hexagon(육각형) - 벌집 모양도 육각형 도배
 
 도메인을 기준으로 데이터를 주고 받는다고 이해하면 됩니다.
 ```
+
+## 관련 문서
+
+- [Hexagonal Architecture (English)](./hexagonal.md)
+- [Getting Started](../guides/getting-started.md)
