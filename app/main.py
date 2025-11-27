@@ -1,7 +1,5 @@
 import os
 
-from faq.adapter.input.web.faqs_router import faqs_router
-
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 os.environ["TORCH_USE_CUDA_DSA"] = "1"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
@@ -37,7 +35,8 @@ from documents_multi_agents.adapter.input.web.document_multi_agent_router import
 from financial_statement.adapter.input.web.financial_statement_router import financial_statement_router
 from financial_statement.adapter.input.web.xbrl_router import xbrl_router
 from social_oauth.adapter.input.web.google_oauth2_router import authentication_router
-
+from faq.adapter.input.web.faqs_router import faqs_router
+from inquiry.adapter.input.web.inquiry_router import inquiry_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -61,6 +60,9 @@ app.include_router(board_router, prefix="/board")
 app.include_router(documents_router, prefix="/documents")
 app.include_router(documents_multi_agents_router, prefix="/documents-multi-agents")
 app.include_router(financial_statement_router, prefix="/financial-statements")
+app.include_router(faqs_router, prefix="/faqs")
+app.include_router(inquiry_router, prefix="/inquiries")
+
 app.include_router(xbrl_router, prefix="/xbrl")
 
 # 앱 실행

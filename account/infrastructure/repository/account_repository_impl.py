@@ -14,7 +14,8 @@ class AccountRepositoryImpl(AccountRepositoryPort):
     def save(self, account: Account) -> Account:
         orm_account = AccountORM(
             email=account.email,
-            nickname=account.nickname
+            nickname=account.nickname,
+            role = account.role
         )
         self.db.add(orm_account)
         self.db.commit()
@@ -33,6 +34,7 @@ class AccountRepositoryImpl(AccountRepositoryPort):
         account = Account(
             email=orm_account.email,
             nickname=orm_account.nickname,
+            role=orm_account.role
         )
         account.id = orm_account.id
         account.created_at = orm_account.created_at
@@ -43,7 +45,7 @@ class AccountRepositoryImpl(AccountRepositoryPort):
         orm_accounts = self.db.query(AccountORM).filter(AccountORM.id.in_(ids)).all()
         accounts: List[Account] = []
         for o in orm_accounts:
-            account = Account(email=o.email, nickname=o.nickname)
+            account = Account(email=o.email, nickname=o.nickname, role=o.role)
             account.id = o.id
             account.created_at = o.created_at
             account.updated_at = o.updated_at
