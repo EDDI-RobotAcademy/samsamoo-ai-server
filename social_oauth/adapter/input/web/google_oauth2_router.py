@@ -107,7 +107,12 @@ async def auth_status(request: Request, session_id: str | None = Cookie(None)):
     user_id = session_dict.get("user_id")
 
     print("[DEBUG] Session valid. user_id:", user_id)
-    return {"logged_in": True, "user_id": user_id}
+    # DB에서 계정 정보 조회
+    account = account_usecase.get_account_by_id(user_id)
+    role = account.role if account else None
+
+    return {"logged_in": True, "user_id": user_id, "role": role}
+
 
 
 @authentication_router.post("/logout")

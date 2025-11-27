@@ -7,19 +7,30 @@ Provides APIs for:
 - XBRL financial statement retrieval
 - Financial ratio calculation
 - LLM-powered corporate analysis
+- Persistent analysis storage with PDF/Markdown reports
+- Analysis history and management
 """
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Depends
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from sqlalchemy.orm import Session
+from typing import Optional, List, Dict
 import logging
 import tempfile
+import glob
 import os
+from pathlib import Path
 
 from financial_statement.domain.xbrl_document import ReportType
+from financial_statement.domain.xbrl_analysis import XBRLSourceType
 from financial_statement.application.usecase.xbrl_analysis_usecase import XBRLAnalysisUseCase, XBRLAnalysisError
+from account.adapter.input.web.session_helper import get_current_user
 
 logger = logging.getLogger(__name__)
+# 프로젝트 루트(서버 레포 루트)를 소스 파일 기준으로 계산
+# xbrl_router.py 위치가 financial_statement/adapter/input/web/ 라면, 루트까지는 parents[3] 또는 [4]일 수 있음.
+BASE_DIR = Path(__file__).resolve().parents[4]  # 필요시 3 또는 5로 조정
+REPORTS_BASE_DIR = BASE_DIR / "generated_reports"
 
 # Initialize router
 xbrl_router = APIRouter(tags=["xbrl-analysis"])
@@ -473,15 +484,15 @@ async def analyze_uploaded_xbrl(
         
         # Extract financial data
         financial_data = xbrl_service.extract_financial_data(xbrl_doc)
-        
-        # Validate extraction
-        validation = xbrl_service.validate_xbrl_structure(xbrl_doc)
+
+        # Validate extraction (pass financial_data for accurate validation)
+        validation = xbrl_service.validate_xbrl_structure(xbrl_doc, financial_data)
         
         # Calculate ratios
         ratios = []
         ratio_data = []
         try:
-            ratios = calculation_service.calculate_all_ratios(financial_data, statement_id=0)
+            ratios = calculation_service.calculate_all_ratios(financial_data, statement_id=0, skip_statement_id_validation=True)
             ratio_data = [
                 {
                     'type': r.ratio_type,
@@ -616,7 +627,7 @@ async def calculate_ratios_from_upload(
         
         # Extract and calculate
         financial_data = xbrl_service.extract_financial_data(xbrl_doc)
-        ratios = calculation_service.calculate_all_ratios(financial_data, statement_id=0)
+        ratios = calculation_service.calculate_all_ratios(financial_data, statement_id=0, skip_statement_id_validation=True)
         
         return {
             'status': 'success',
@@ -714,7 +725,7 @@ async def parse_xbrl_file(
         
         # Extract data
         financial_data = xbrl_service.extract_financial_data(xbrl_doc)
-        validation = xbrl_service.validate_xbrl_structure(xbrl_doc)
+        validation = xbrl_service.validate_xbrl_structure(xbrl_doc, financial_data)
         
         result = {
             'status': 'success',
@@ -767,4 +778,375 @@ async def health_check():
             "historical_analysis": dart_key_configured,
             "comparison": dart_key_configured,
         }
+    }
+
+
+# ============================================================
+# Persistent Analysis Endpoints (PDF Analysis Parity)
+# ============================================================
+
+class XBRLAnalysisResponse(BaseModel):
+    """Response model for XBRL analysis record"""
+    id: int
+    corp_code: str
+    corp_name: str
+    fiscal_year: int
+    report_type: str
+    status: str
+    has_llm_analysis: bool
+    has_reports: bool
+    created_at: str
+    analyzed_at: Optional[str] = None
+    # LLM analysis summary fields for list preview
+    executive_summary: Optional[str] = None
+    financial_health_rating: Optional[str] = None
+    investment_recommendation: Optional[str] = None
+
+
+class XBRLAnalysisListResponse(BaseModel):
+    """Response model for analysis list"""
+    analyses: List[XBRLAnalysisResponse]
+    total: int
+    page: int
+    size: int
+
+
+@xbrl_router.get("/analyses/list", response_model=XBRLAnalysisListResponse)
+async def list_user_analyses(
+    page: int = Query(1, ge=1),
+    size: int = Query(10, ge=1, le=100),
+    user_id: int = Depends(get_current_user)
+):
+    """
+    List all XBRL analyses for current user with pagination.
+    
+    Returns a paginated list of the user's saved XBRL analyses.
+    """
+    try:
+        usecase = get_usecase()
+        analyses = usecase.get_user_analyses(user_id, page, size)
+        total = usecase.count_user_analyses(user_id)
+        
+        # Extract financial health rating and investment recommendation from nested dicts
+        def get_health_rating(analysis):
+            if analysis.financial_health and isinstance(analysis.financial_health, dict):
+                return analysis.financial_health.get('rating')
+            return None
+
+        def get_investment_rec(analysis):
+            if analysis.investment_recommendation and isinstance(analysis.investment_recommendation, dict):
+                return analysis.investment_recommendation.get('recommendation')
+            return None
+
+        return XBRLAnalysisListResponse(
+            analyses=[
+                XBRLAnalysisResponse(
+                    id=a.id,
+                    corp_code=a.corp_code,
+                    corp_name=a.corp_name,
+                    fiscal_year=a.fiscal_year,
+                    report_type=a.report_type,
+                    status=a.status.value if hasattr(a.status, 'value') else str(a.status),
+                    has_llm_analysis=a.has_llm_analysis(),
+                    has_reports=a.has_reports(),
+                    created_at=a.created_at.isoformat() if a.created_at else "",
+                    analyzed_at=a.analyzed_at.isoformat() if a.analyzed_at else None,
+                    # Include LLM summary for list preview
+                    executive_summary=a.executive_summary[:500] + "..." if a.executive_summary and len(a.executive_summary) > 500 else a.executive_summary,
+                    financial_health_rating=get_health_rating(a),
+                    investment_recommendation=get_investment_rec(a)
+                )
+                for a in analyses
+            ],
+            total=total,
+            page=page,
+            size=size
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to list analyses: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list analyses: {str(e)}")
+
+
+@xbrl_router.post("/analyses/create")
+async def create_and_analyze(
+    file: UploadFile = File(..., description="XBRL file to analyze"),
+    corp_name: str = Form(default="Unknown", description="Corporation name"),
+    fiscal_year: int = Form(default=2023, ge=2000, le=2100, description="Fiscal year"),
+    industry: str = Form(default="default", description="Industry for benchmarking"),
+    include_llm_analysis: bool = Form(default=True, description="Include LLM analysis"),
+    generate_reports: bool = Form(default=True, description="Generate PDF/Markdown reports"),
+    user_id: int = Depends(get_current_user)
+):
+    """
+    Upload XBRL file, create analysis record, and run full analysis pipeline.
+    
+    This is the main endpoint for authenticated users to analyze XBRL files
+    with full persistence and report generation (matching PDF analysis functionality).
+    
+    **Pipeline Stages:**
+    1. Create analysis record
+    2. Parse XBRL file
+    3. Extract financial data
+    4. Calculate financial ratios
+    5. Generate LLM analysis (optional)
+    6. Generate PDF/Markdown reports (optional)
+    
+    **Parameters:**
+    - **file**: XBRL file to upload
+    - **corp_name**: Corporation name
+    - **fiscal_year**: Fiscal year of the report
+    - **industry**: Industry category for benchmark comparison
+    - **include_llm_analysis**: Set to true for AI-powered analysis
+    - **generate_reports**: Set to true for PDF/Markdown report generation
+    
+    **Returns:**
+    - Complete analysis result with ID for future reference
+    """
+    # Validate file extension
+    allowed_extensions = {'.html', '.xhtml', '.htm', '.xml', '.xbrl', '.zip'}
+    file_ext = os.path.splitext(file.filename or '')[1].lower()
+    
+    if file_ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Allowed: {', '.join(allowed_extensions)}"
+        )
+    
+    try:
+        # Read file content
+        content = await file.read()
+        
+        if len(content) == 0:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
+        
+        if len(content) > 50 * 1024 * 1024:  # 50MB limit
+            raise HTTPException(status_code=400, detail="File too large. Maximum size is 50MB")
+        
+        # Handle ZIP files
+        if file_ext == '.zip':
+            import zipfile
+            import io
+            
+            with tempfile.TemporaryDirectory() as temp_dir:
+                zip_path = os.path.join(temp_dir, 'upload.zip')
+                with open(zip_path, 'wb') as f:
+                    f.write(content)
+                
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    xbrl_file = None
+                    for name in zf.namelist():
+                        if any(name.lower().endswith(ext) for ext in ['.html', '.xhtml', '.htm', '.xml', '.xbrl']):
+                            xbrl_file = name
+                            break
+                    
+                    if not xbrl_file:
+                        raise HTTPException(status_code=400, detail="No XBRL file found in ZIP archive")
+                    
+                    content = zf.read(xbrl_file)
+        
+        usecase = get_usecase()
+        
+        # Step 1: Create analysis record
+        analysis = await usecase.create_analysis(
+            corp_code="UPLOAD",
+            corp_name=corp_name,
+            fiscal_year=fiscal_year,
+            user_id=user_id,
+            report_type="annual",
+            source_type=XBRLSourceType.UPLOAD,
+            source_filename=file.filename
+        )
+        
+        logger.info(f"Created analysis record: {analysis.id}")
+        
+        # Step 2: Run full analysis pipeline
+        analysis = await usecase.run_full_analysis_pipeline(
+            analysis_id=analysis.id,
+            xbrl_content=content,
+            industry=industry,
+            include_llm=include_llm_analysis,
+            generate_reports=generate_reports
+        )
+        
+        return analysis.to_dict()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Analysis creation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+
+@xbrl_router.get("/analyses/{analysis_id}")
+async def get_analysis(
+    analysis_id: int,
+    user_id: int = Depends(get_current_user)
+):
+    """
+    Get a single XBRL analysis by ID.
+    
+    Returns complete analysis details including financial data, ratios, and LLM analysis.
+    """
+    try:
+        usecase = get_usecase()
+        analysis = usecase.get_analysis(analysis_id)
+        
+        if not analysis:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        
+        # Check ownership (allow if no user_id set, for backwards compatibility)
+        if analysis.user_id and analysis.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to view this analysis")
+        
+        return analysis.to_dict()
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get analysis: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get analysis: {str(e)}")
+
+
+@xbrl_router.get("/analyses/{analysis_id}/report/download")
+async def download_analysis_report_pdf(
+    analysis_id: int,
+    user_id: int = Depends(get_current_user)
+):
+    """
+    Download PDF report for an XBRL analysis.
+    """
+    try:
+        usecase = get_usecase()
+        analysis = usecase.get_analysis(analysis_id)
+        
+        if not analysis:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        
+        if analysis.user_id and analysis.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to download this report")
+        
+        if not analysis.report_pdf_path:
+            raise HTTPException(status_code=404, detail="PDF report not found")
+        
+        if not os.path.exists(analysis.report_pdf_path):
+            raise HTTPException(status_code=404, detail="PDF report file not found on disk")
+        
+        return FileResponse(
+            path=analysis.report_pdf_path,
+            media_type="application/pdf",
+            filename=f"xbrl_report_{analysis_id}.pdf"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to download PDF report: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to download report: {str(e)}")
+
+
+@xbrl_router.get("/analyses/{analysis_id}/report/download/md")
+async def download_analysis_report_md(
+    analysis_id: int,
+    user_id: int = Depends(get_current_user)
+):
+    """
+    Download Markdown report for an XBRL analysis.
+    
+    Markdown reports have perfect Korean text support.
+    """
+    try:
+        usecase = get_usecase()
+        analysis = usecase.get_analysis(analysis_id)
+        
+        if not analysis:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        
+        if analysis.user_id and analysis.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to download this report")
+        
+        if not analysis.report_md_path:
+            raise HTTPException(status_code=404, detail="Markdown report not found")
+        
+        if not os.path.exists(analysis.report_md_path):
+            raise HTTPException(status_code=404, detail="Markdown report file not found on disk")
+        
+        return FileResponse(
+            path=analysis.report_md_path,
+            media_type="text/markdown; charset=utf-8",
+            filename=f"xbrl_report_{analysis_id}.md",
+            headers={"Content-Disposition": f"attachment; filename=xbrl_report_{analysis_id}.md"}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to download Markdown report: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to download report: {str(e)}")
+
+
+@xbrl_router.delete("/analyses/{analysis_id}")
+async def delete_analysis(
+    analysis_id: int,
+    user_id: int = Depends(get_current_user)
+):
+    """
+    Delete an XBRL analysis (owner only).
+    
+    Removes the analysis record and any generated reports.
+    """
+    try:
+        usecase = get_usecase()
+        success = usecase.delete_analysis(analysis_id, user_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        
+        return JSONResponse({"result": "deleted", "analysis_id": analysis_id})
+        
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete analysis: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete analysis: {str(e)}")
+
+import os, glob, logging
+from utils.reports_path import get_reports_base_dir
+logger = logging.getLogger("xbrl.charts")
+REPORTS_BASE_DIR = get_reports_base_dir()
+
+@xbrl_router.get("/analyses/{analysis_id}/charts")
+async def list_analysis_charts(analysis_id: int):
+    base = REPORTS_BASE_DIR
+
+    # 1) 디렉터리 후보
+    cand = [
+        base / "xbrl" / f"analysis_{analysis_id}" / "charts",
+        base / f"statement_{analysis_id}" / "charts",
+    ]
+    charts_dir = next((p for p in cand if p.is_dir()), None)
+    if not charts_dir:
+        logger.warning(f"[charts] not found. tried={cand}")
+        raise HTTPException(status_code=404, detail=f"차트 디렉터리가 없습니다. (analysis_{analysis_id})")
+
+    # 2) 파일 수집
+    files = sorted(charts_dir.glob("*.png"))
+    logger.info(f"[charts] charts_dir={charts_dir}")
+    logger.info(f"[charts] files={[p.name for p in files]}")
+
+    if not files:
+        raise HTTPException(status_code=404, detail="차트 이미지가 없습니다.")
+
+    # 3) /static 상대 경로로 URL 구성
+    images = [{
+        "name": p.name,
+        "url": f"/static/{p.relative_to(base).as_posix()}"
+    } for p in files]
+
+    return {
+        "bundleId": f"xbrl_analysis_{analysis_id}",
+        "images": images,
+        "count": len(images),
     }
