@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 # ---------------------------------
 # 1) 환경 설정
 # ---------------------------------
+from starlette.staticfiles import StaticFiles
+
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 os.environ["TORCH_USE_CUDA_DSA"] = "1"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
@@ -47,6 +49,20 @@ from financial_statement.infrastructure.orm import (
 # 3) 모든 테이블 생성 (ORM import 후!)
 # ---------------------------------
 Base.metadata.create_all(bind=engine)
+from documents.adapter.input.web.documents_router import documents_router
+from documents_multi_agents.adapter.input.web.document_multi_agent_router import documents_multi_agents_router
+from financial_statement.adapter.input.web.financial_statement_router import financial_statement_router
+from financial_statement.adapter.input.web.xbrl_router import xbrl_router
+from social_oauth.adapter.input.web.google_oauth2_router import authentication_router
+from starlette.middleware.sessions import SessionMiddleware
+
+
+# .env 불러오기
+load_dotenv()
+
+
+# 관리자 구글 이메일 리스트
+ADMIN_GOOGLE_EMAILS = os.getenv("ADMIN_GOOGLE_EMAILS", "").split(",")
 
 # ---------------------------------
 # 4) FastAPI App 생성
@@ -54,14 +70,18 @@ Base.metadata.create_all(bind=engine)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
+from utils.reports_path import get_reports_base_dir
 
 app = FastAPI()
+# 위에서 계산한 REPORTS_BASE_DIR와 동일 경로 사용
+REPORTS_BASE_DIR = get_reports_base_dir()
+print("[app] mount /static ->", REPORTS_BASE_DIR)  # 시작 로그
 
-# ---------------------------------
-# 5) CORS 설정
-# ---------------------------------
+app.mount("/static", StaticFiles(directory=str(REPORTS_BASE_DIR)), name="static")
+# CORS 설정
 origins = [
-    "http://localhost:3000",      # Next.js 프론트
+    "http://localhost:3000",  # Next.js 프론트 URL
+    "http://localhost:33333",
 ]
 
 app.add_middleware(
