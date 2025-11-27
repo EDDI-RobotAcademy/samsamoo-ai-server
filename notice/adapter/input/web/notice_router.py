@@ -1,62 +1,63 @@
-import os
-from dotenv import load_dotenv
-from fastapi import HTTPException
+import json
+from fastapi import APIRouter, Request, Depends, HTTPException
+from typing import List
 
 from notice.adapter.input.web.request.create_notice_request import CreateNoticeRequest
 from notice.adapter.input.web.request.update_notice_request import UpdateNoticeRequest
-from fastapi import APIRouter
-from typing import List
 from notice.application.usecase.notice_usecase import NoticeUsecase
 from notice.infrastructure.repository.notice_repository_impl import NoticeRepositoryImpl
-from fastapi import Request, Depends
+
 from config.redis_config import get_redis
 
-
-
-load_dotenv()
-
 redis_client = get_redis()
-
-ADMIN_GOOGLE_EMAILS = os.getenv("ADMIN_GOOGLE_EMAILS", "").split(",")
-
 notice_router = APIRouter(tags=["notice"])
 
-# 🔥 repository 인스턴스 생성
+# Repository & Usecase
 notice_repository = NoticeRepositoryImpl()
-
-# 🔥 usecase에 repository 주입
 notice_usecase = NoticeUsecase(notice_repository)
 
 
-# ---------------- 공통 함수 ----------------
+# ===============================
+# 🔥 ADMIN 권한 체크 (최종 버전)
+# ===============================
 def admin_required(request: Request):
-    ADMIN_GOOGLE_EMAILS = os.getenv("ADMIN_GOOGLE_EMAILS", "").split(",")
-    print(ADMIN_GOOGLE_EMAILS)
-    # 여기서 request에서 user_email 가져오기
-    user_email = getattr(request.state, "user_email", None)
+    session_id = request.cookies.get("session_id")
 
-    if not user_email:
-        # 쿠키나 헤더에서 세션 id 확인 후 Redis에서 가져와도 됨
-        session_id = request.cookies.get("session_id")
-        if session_id:
-            session_data = redis_client.get(f"session:{session_id}")
-            if session_data:
-                import json
-                session_dict = json.loads(session_data)
-                user_email = session_dict.get("email")
+    if not session_id:
+        raise HTTPException(status_code=403, detail="로그인이 필요합니다.")
 
-    return user_email in ADMIN_GOOGLE_EMAILS
-# ---------------- CRUD ----------------
+    session_data = redis_client.get(f"session:{session_id}")
+    if not session_data:
+        raise HTTPException(status_code=403, detail="세션이 유효하지 않습니다.")
 
+    if isinstance(session_data, bytes):
+        session_data = session_data.decode("utf-8")
+
+    session_dict = json.loads(session_data)
+
+    role = session_dict.get("role")
+
+    if role != "ADMIN":
+        raise HTTPException(status_code=403, detail="관리자 권한이 없습니다.")
+
+    return session_dict
+
+
+# ===============================
+# 🔥 CRUD
+# ===============================
+
+# 1) 공지 생성
 @notice_router.post("/create")
 def create_notice(
     request_data: CreateNoticeRequest,
-    admin_email: str = Depends(admin_required)
+    admin_session: dict = Depends(admin_required)
 ):
     notice = notice_usecase.create_notice(
         title=request_data.title,
         content=request_data.content
     )
+
     return {
         "id": notice.id,
         "title": notice.title,
@@ -65,11 +66,12 @@ def create_notice(
     }
 
 
+# 2) 공지 수정
 @notice_router.put("/update/{notice_id}")
 def update_notice(
     notice_id: int,
     request_data: UpdateNoticeRequest,
-    admin_email: str = Depends(admin_required)
+    admin_session: dict = Depends(admin_required)
 ):
     updated_notice = notice_usecase.update_notice(
         notice_id,
@@ -88,10 +90,11 @@ def update_notice(
     }
 
 
+# 3) 공지 삭제
 @notice_router.delete("/delete/{notice_id}")
 def delete_notice(
     notice_id: int,
-    admin_email: str = Depends(admin_required)
+    admin_session: dict = Depends(admin_required)
 ):
     success = notice_usecase.delete_notice(notice_id)
 
@@ -100,16 +103,13 @@ def delete_notice(
 
     return {"detail": "삭제 완료"}
 
+
+# 4) 공지 목록
 @notice_router.get("/list")
-def list_notices(request: Request):
+def list_notices():
     notices = notice_usecase.list_notices()
 
-    print(request)
-    # 관리자 체크
-    is_admin = admin_required(request)
-    print("is_admin: "+str(is_admin))
     return {
-        "is_admin": is_admin,
         "notices": [
             {
                 "id": n.id,
@@ -119,4 +119,20 @@ def list_notices(request: Request):
             }
             for n in notices
         ]
+    }
+
+
+# 5) 공지 상세조회 (edit 페이지에서 사용)
+@notice_router.get("/{notice_id}")
+def get_notice(notice_id: int):
+    notice = notice_usecase.get_notice(notice_id)
+
+    if not notice:
+        raise HTTPException(status_code=404, detail="공지사항을 찾을 수 없습니다.")
+
+    return {
+        "id": notice.id,
+        "title": notice.title,
+        "content": notice.content,
+        "created_at": notice.created_at.isoformat()
     }
