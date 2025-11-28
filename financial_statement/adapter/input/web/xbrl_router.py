@@ -13,10 +13,13 @@ Provides APIs for:
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Depends
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from sqlalchemy.orm import Session
+from typing import Optional, List, Dict
 import logging
 import tempfile
+import glob
 import os
+from pathlib import Path
 
 from financial_statement.domain.xbrl_document import ReportType
 from financial_statement.domain.xbrl_analysis import XBRLSourceType
@@ -24,6 +27,10 @@ from financial_statement.application.usecase.xbrl_analysis_usecase import XBRLAn
 from account.adapter.input.web.session_helper import get_current_user
 
 logger = logging.getLogger(__name__)
+# 프로젝트 루트(서버 레포 루트)를 소스 파일 기준으로 계산
+# xbrl_router.py 위치가 financial_statement/adapter/input/web/ 라면, 루트까지는 parents[3] 또는 [4]일 수 있음.
+BASE_DIR = Path(__file__).resolve().parents[4]  # 필요시 3 또는 5로 조정
+REPORTS_BASE_DIR = BASE_DIR / "generated_reports"
 
 # Initialize router
 xbrl_router = APIRouter(tags=["xbrl-analysis"])
@@ -1104,3 +1111,42 @@ async def delete_analysis(
     except Exception as e:
         logger.error(f"Failed to delete analysis: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete analysis: {str(e)}")
+
+import os, glob, logging
+from utils.reports_path import get_reports_base_dir
+logger = logging.getLogger("xbrl.charts")
+REPORTS_BASE_DIR = get_reports_base_dir()
+
+@xbrl_router.get("/analyses/{analysis_id}/charts")
+async def list_analysis_charts(analysis_id: int):
+    base = REPORTS_BASE_DIR
+
+    # 1) 디렉터리 후보
+    cand = [
+        base / "xbrl" / f"analysis_{analysis_id}" / "charts",
+        base / f"statement_{analysis_id}" / "charts",
+    ]
+    charts_dir = next((p for p in cand if p.is_dir()), None)
+    if not charts_dir:
+        logger.warning(f"[charts] not found. tried={cand}")
+        raise HTTPException(status_code=404, detail=f"차트 디렉터리가 없습니다. (analysis_{analysis_id})")
+
+    # 2) 파일 수집
+    files = sorted(charts_dir.glob("*.png"))
+    logger.info(f"[charts] charts_dir={charts_dir}")
+    logger.info(f"[charts] files={[p.name for p in files]}")
+
+    if not files:
+        raise HTTPException(status_code=404, detail="차트 이미지가 없습니다.")
+
+    # 3) /static 상대 경로로 URL 구성
+    images = [{
+        "name": p.name,
+        "url": f"/static/{p.relative_to(base).as_posix()}"
+    } for p in files]
+
+    return {
+        "bundleId": f"xbrl_analysis_{analysis_id}",
+        "images": images,
+        "count": len(images),
+    }
